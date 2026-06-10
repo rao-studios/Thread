@@ -17,6 +17,24 @@ protocol EmbeddingProviding: Actor {
     ) async throws -> (result: [EmbeddingData], usage: Requests.Embedding.Get.Result.Usage)
 }
 
+extension EmbeddingProviding {
+    /// Run `body` while holding a preprocess slot, releasing it on every exit
+    /// path — including throws. Replaces the `defer { Task { await release } }`
+    /// pattern, whose unstructured release task could be delayed (or never
+    /// scheduled under cancellation), leaking slots until the pool starved.
+    func withPreprocessSlot<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
+        await acquirePreprocessSlot()
+        do {
+            let result = try await body()
+            await releasePreprocessSlot()
+            return result
+        } catch {
+            await releasePreprocessSlot()
+            throw error
+        }
+    }
+}
+
 // MARK: - Backpressure
 
 enum EmbeddingBackpressureError: Error {

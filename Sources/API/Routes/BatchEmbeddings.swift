@@ -57,50 +57,51 @@ func registerBatchEmbeddingsRoute(
         ) { group in
             for (idx, input) in inputs.enumerated() {
                 group.addTask {
-                    await embeddingModelProvider.acquirePreprocessSlot()
-                    defer { Task { await embeddingModelProvider.releasePreprocessSlot() } }
+                    // Slot held for the whole preprocess body; released on every
+                    // exit path by withPreprocessSlot (no unstructured release task).
+                    await embeddingModelProvider.withPreprocessSlot {
+                        let values: [String] = input.values.filter { !$0.isEmpty }
 
-                    let values: [String] = input.values.filter { !$0.isEmpty }
-
-                    let texts: [String]
-                    if embeddingRequest.sanitize == true {
-                        texts = TextChunker.chunk(values)
-                        logger.info("Batch Embedding", "Chunked into \(texts.count) segment(s) (sanitize=true)", service: .embedding)
-                    } else {
-                        texts = values
-                    }
-
-                    guard !texts.isEmpty, texts.allSatisfy({ !$0.isEmpty }) else {
-                        logger.info(
-                            "Batch Embedding",
-                            "⚠️ Dropping input[\(idx)] — all text values are empty (ID: \(embeddingReqId))",
-                            service: .embedding
-                        )
-                        return (idx, nil, nil, false)
-                    }
-
-                    let documentId = database.computeHash(from: texts)
-                    // Partition table is the single source of truth for "is this document indexed."
-                    // registry.doesDocumentExist is NOT used as the skip gate — it can be true
-                    // for tombstoned documents (crash victims whose PQ index was lost before the
-                    // indices flush), permanently preventing re-indexing under the old check.
-                    // table.keys only contains a document after both HNSW nodes and PQ index are
-                    // stored (PartitionTable.put inserts keys AFTER indices), so this check is
-                    // atomic with respect to a complete, valid index entry.
-                    if database.table?.keys.contains(documentId) == true {
-                        let registry = database.registry
-                        let ownerLinked = registry?.isOwnerLinked(documentId, ownerId: ownerId) ?? true
-                        let groupLinked = requestedGroupId.flatMap { gid in
-                            registry.map { ($0.documentGroups[documentId]?.contains(gid)) ?? false }
-                        } ?? true
-                        if !ownerLinked || !groupLinked {
-                            logger.info("Batch Embedding", "Document indexed, linking owner/group (ID: \(embeddingReqId))", service: .embedding)
-                            return (idx, texts, documentId, true)
+                        let texts: [String]
+                        if embeddingRequest.sanitize == true {
+                            texts = TextChunker.chunk(values)
+                            logger.info("Batch Embedding", "Chunked into \(texts.count) segment(s) (sanitize=true)", service: .embedding)
+                        } else {
+                            texts = values
                         }
-                        logger.info("Batch Embedding", "Document indexed, skipping (ID: \(embeddingReqId))", service: .embedding)
-                        return (idx, nil, documentId, false)
+
+                        guard !texts.isEmpty, texts.allSatisfy({ !$0.isEmpty }) else {
+                            logger.info(
+                                "Batch Embedding",
+                                "⚠️ Dropping input[\(idx)] — all text values are empty (ID: \(embeddingReqId))",
+                                service: .embedding
+                            )
+                            return (idx, nil, nil, false)
+                        }
+
+                        let documentId = database.computeHash(from: texts)
+                        // Partition table is the single source of truth for "is this document indexed."
+                        // registry.doesDocumentExist is NOT used as the skip gate — it can be true
+                        // for tombstoned documents (crash victims whose PQ index was lost before the
+                        // indices flush), permanently preventing re-indexing under the old check.
+                        // table.keys only contains a document after both HNSW nodes and PQ index are
+                        // stored (PartitionTable.put inserts keys AFTER indices), so this check is
+                        // atomic with respect to a complete, valid index entry.
+                        if database.table?.keys.contains(documentId) == true {
+                            let registry = database.registry
+                            let ownerLinked = registry?.isOwnerLinked(documentId, ownerId: ownerId) ?? true
+                            let groupLinked = requestedGroupId.flatMap { gid in
+                                registry.map { ($0.documentGroups[documentId]?.contains(gid)) ?? false }
+                            } ?? true
+                            if !ownerLinked || !groupLinked {
+                                logger.info("Batch Embedding", "Document indexed, linking owner/group (ID: \(embeddingReqId))", service: .embedding)
+                                return (idx, texts, documentId, true)
+                            }
+                            logger.info("Batch Embedding", "Document indexed, skipping (ID: \(embeddingReqId))", service: .embedding)
+                            return (idx, nil, documentId, false)
+                        }
+                        return (idx, texts, documentId, false)
                     }
-                    return (idx, texts, documentId, false)
                 }
             }
 

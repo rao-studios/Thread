@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import MLXAccelerate
 
 /// Internal ANN candidate used during HNSW graph traversal.
 /// Not part of the public API — scoped to this file only.
@@ -919,52 +920,19 @@ private extension HNSWGraph {
     // MARK: Distance
 
     /// Squared Euclidean distance between a `[Float]` query and a mmap'd node vector.
-    ///
-    /// 8 independent accumulators break the loop-carried dependency chain so LLVM
-    /// auto-vectorizes to SIMD (NEON on ARM64, AVX2 on x86-64) at -O with no imports.
+    /// Delegates to the shared MLXAccelerate CPU kernel (8-accumulator SIMD).
     @inline(__always)
     func squaredDist(_ a: [Float], _ b: UnsafeBufferPointer<Float>) -> Float {
         let n = Swift.min(a.count, b.count)
-        var s0: Float = 0, s1: Float = 0, s2: Float = 0, s3: Float = 0
-        var s4: Float = 0, s5: Float = 0, s6: Float = 0, s7: Float = 0
-        a.withUnsafeBufferPointer { ap in
-            let aP = ap.baseAddress!
-            let bP = b.baseAddress!
-            var i = 0
-            while i &+ 8 <= n {
-                let d0 = aP[i]   - bP[i];   let d1 = aP[i+1] - bP[i+1]
-                let d2 = aP[i+2] - bP[i+2]; let d3 = aP[i+3] - bP[i+3]
-                let d4 = aP[i+4] - bP[i+4]; let d5 = aP[i+5] - bP[i+5]
-                let d6 = aP[i+6] - bP[i+6]; let d7 = aP[i+7] - bP[i+7]
-                s0 += d0*d0; s1 += d1*d1; s2 += d2*d2; s3 += d3*d3
-                s4 += d4*d4; s5 += d5*d5; s6 += d6*d6; s7 += d7*d7
-                i &+= 8
-            }
-            while i < n { let d = aP[i] - bP[i]; s0 += d*d; i &+= 1 }
+        return a.withUnsafeBufferPointer { ap in
+            squaredEuclidean(ap.baseAddress!, b.baseAddress!, n)
         }
-        return s0+s1+s2+s3+s4+s5+s6+s7
     }
 
     /// Squared Euclidean distance between two mmap'd node vectors (used in `pruneNeighbors`).
     @inline(__always)
     func squaredDist(_ a: UnsafeBufferPointer<Float>, _ b: UnsafeBufferPointer<Float>) -> Float {
-        let n = Swift.min(a.count, b.count)
-        var s0: Float = 0, s1: Float = 0, s2: Float = 0, s3: Float = 0
-        var s4: Float = 0, s5: Float = 0, s6: Float = 0, s7: Float = 0
-        let aP = a.baseAddress!
-        let bP = b.baseAddress!
-        var i = 0
-        while i &+ 8 <= n {
-            let d0 = aP[i]   - bP[i];   let d1 = aP[i+1] - bP[i+1]
-            let d2 = aP[i+2] - bP[i+2]; let d3 = aP[i+3] - bP[i+3]
-            let d4 = aP[i+4] - bP[i+4]; let d5 = aP[i+5] - bP[i+5]
-            let d6 = aP[i+6] - bP[i+6]; let d7 = aP[i+7] - bP[i+7]
-            s0 += d0*d0; s1 += d1*d1; s2 += d2*d2; s3 += d3*d3
-            s4 += d4*d4; s5 += d5*d5; s6 += d6*d6; s7 += d7*d7
-            i &+= 8
-        }
-        while i < n { let d = aP[i] - bP[i]; s0 += d*d; i &+= 1 }
-        return s0+s1+s2+s3+s4+s5+s6+s7
+        squaredEuclidean(a.baseAddress!, b.baseAddress!, Swift.min(a.count, b.count))
     }
 
     // MARK: Threshold calibration

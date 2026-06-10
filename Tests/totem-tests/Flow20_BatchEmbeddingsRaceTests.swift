@@ -26,6 +26,7 @@
 import XCTest
 import Hummingbird
 import HummingbirdTesting
+import Logging
 @testable import totem
 
 final class Flow20_BatchEmbeddingsRaceTests: XCTestCase {
@@ -182,5 +183,50 @@ final class Flow20_BatchEmbeddingsRaceTests: XCTestCase {
         XCTAssertNotNil(group, "Group must be registered")
         XCTAssertFalse(group?.metadata?.tags.isEmpty ?? true,
             "Prepared-path group must have tags from TagGenerator")
+    }
+
+    // MARK: - Preprocess slot accounting
+
+    /// Counts every acquire/release so the balance can be asserted after
+    /// throwing and non-throwing bodies.
+    private actor SlotCountingProvider: EmbeddingProviding {
+        var acquired = 0
+        var released = 0
+
+        func acquirePreprocessSlot() async { acquired += 1 }
+        func releasePreprocessSlot() async { released += 1 }
+        func run(_ texts: [String], logger: Logger, priority: Bool) async throws
+            -> (result: [EmbeddingData], usage: Requests.Embedding.Get.Result.Usage) {
+            ([], Requests.Embedding.Get.Result.Usage(
+                promptAudioSeconds: nil, promptTokens: 0, totalTokens: 0,
+                completionTokens: 0, requestCount: nil, promptTokenDetails: nil))
+        }
+    }
+
+    private struct SlotTestError: Error {}
+
+    /// withPreprocessSlot must release exactly once per acquire — including when
+    /// the body throws. The old `defer { Task { await release } }` pattern could
+    /// leak slots when the unstructured release task was never scheduled.
+    func testWithPreprocessSlotReleasesOnEveryPath() async {
+        let provider = SlotCountingProvider()
+
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<50 {
+                group.addTask {
+                    do {
+                        try await provider.withPreprocessSlot {
+                            if i % 2 == 0 { throw SlotTestError() }
+                        }
+                    } catch {}
+                }
+            }
+        }
+
+        let acquired = await provider.acquired
+        let released = await provider.released
+        XCTAssertEqual(acquired, 50)
+        XCTAssertEqual(released, 50,
+            "Every acquired slot must be released — throwing bodies included")
     }
 }

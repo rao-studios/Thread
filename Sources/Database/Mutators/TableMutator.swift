@@ -46,6 +46,18 @@ actor TableMutator {
     /// Maximum WAL file size per shard before a checkpoint is forced (default: 64 MB).
     static let walCheckpointThreshold = 64 * 1024 * 1024
 
+    // MARK: - PQ index WALs (one per shard, opened lazily)
+    //
+    // Each document put appends its single encoded PartitionIndex to its shard's
+    // `shard-<nodeId>-<i>-indices-wal` in the same actor turn as the topology-WAL
+    // drain — replacing the previous full all-shards indices rewrite per put.
+    // Startup replays these on top of the last full indices checkpoint.
+
+    private var indexWALs: [Int: PartitionIndexWAL] = [:]
+    /// Index-WAL size above which a full indices checkpoint (and WAL truncation)
+    /// is scheduled.
+    static let indexWALCheckpointThreshold = 16 * 1024 * 1024
+
     // MARK: - Debounced disk saves / checkpoints
 
     private var tableDirty = false
@@ -127,28 +139,73 @@ actor TableMutator {
 
     nonisolated func seed(_ initial: PartitionTable) { cache.seed(initial) }
 
-    nonisolated func loadIndicesFromDisk() -> [DocumentID: PartitionIndex]? {
-        var merged = [DocumentID: PartitionIndex]()
+    /// Loads each shard's indices checkpoint plist, then replays that shard's
+    /// PQ index WAL on top (put = upsert, removed = delete). Returns the result
+    /// keyed by source shard so `mergeIndices` can prefer the entry recorded by
+    /// the shard that currently owns each document.
+    nonisolated func loadIndicesFromDisk() -> [Int: [DocumentID: PartitionIndex]]? {
+        var byShard = [Int: [DocumentID: PartitionIndex]]()
         var foundAny = false
+        let decoder = PropertyListDecoder()
         var i = 0
         while true {
             let fp = FilePersistence(key: "shard-\(nodeId)-\(i)-indices", kind: .basic, logger: indicesTotemLogger.base)
-            guard FileManager.default.fileExists(atPath: fp.url.path()) else { break }
-            if let dict: [DocumentID: PartitionIndex] = fp.restore() {
-                merged.merge(dict, uniquingKeysWith: { a, _ in a })
+            let walURL = FilePersistence.getDefaultURL()
+                .appendingPathComponent("shard-\(nodeId)-\(i)-indices-wal")
+            let plistExists = FileManager.default.fileExists(atPath: fp.url.path())
+            let walExists   = FileManager.default.fileExists(atPath: walURL.path)
+            guard plistExists || walExists else { break }
+
+            var shardDict = [DocumentID: PartitionIndex]()
+            if plistExists, let dict: [DocumentID: PartitionIndex] = fp.restore() {
+                shardDict = dict
                 foundAny = true
             }
+            if walExists,
+               let wal = try? PartitionIndexWAL(url: walURL),
+               let records = try? wal.readAll() {
+                for record in records {
+                    switch record {
+                    case .indexPut(let docId, let payload):
+                        if let index = try? decoder.decode(PartitionIndex.self, from: payload) {
+                            shardDict[docId] = index
+                            foundAny = true
+                        }
+                    case .indexRemoved(let docId):
+                        shardDict.removeValue(forKey: docId)
+                    case .commit:
+                        break
+                    }
+                }
+            }
+            byShard[i] = shardDict
             i += 1
         }
-        if foundAny { return merged }
-        return indicesPersistence.restore()  // legacy single-file fallback
+        if foundAny { return byShard }
+        // Legacy single-file fallback (pre-per-shard checkpoints).
+        if let legacy: [DocumentID: PartitionIndex] = indicesPersistence.restore() { return [0: legacy] }
+        return nil
     }
 
-    func mergeIndices(_ indices: [DocumentID: PartitionIndex]) async {
+    func mergeIndices(_ indicesByShard: [Int: [DocumentID: PartitionIndex]]) async {
         guard var table = cache.snapshot else { return }
-        for (docId, index) in indices where table.index(for: docId) == nil {
-            guard let si = table.documentShardIndex[docId], si < table.shards.count else { continue }
-            table.shards[si].indices[docId] = index
+        // Documents indexed after startup (before Phase 5 completed) have fresher
+        // in-memory indices than anything on disk — never overwrite those.
+        let inMemory = Set(table.shards.flatMap { $0.indices.keys })
+        // Cross-shard upserts can leave stale entries in a previous shard's
+        // checkpoint; the entry recorded by the document's current shard wins.
+        var fromOwningShard = Set<DocumentID>()
+        for (sourceShard, indices) in indicesByShard {
+            for (docId, index) in indices {
+                guard !inMemory.contains(docId),
+                      let si = table.documentShardIndex[docId], si < table.shards.count else { continue }
+                let isOwner = sourceShard == si
+                if fromOwningShard.contains(docId) && !isOwner { continue }
+                if table.shards[si].indices[docId] == nil || isOwner {
+                    table.shards[si].indices[docId] = index
+                    if isOwner { fromOwningShard.insert(docId) }
+                }
+            }
         }
         cache.update(table)
     }
@@ -203,8 +260,12 @@ actor TableMutator {
                         logger: logger.base).save(state: metadata)
     }
 
-    private func saveIndicesAsync(_ table: PartitionTable) {
+    private func saveIndicesAsync(_ table: PartitionTable, truncateIndexWALs: Bool = false) {
         let shards = table.shards
+        // Capture WAL sizes with the snapshot: a WAL that grew during the async
+        // save holds records newer than the checkpoint and must not be truncated
+        // (the next checkpoint will catch it).
+        let walSizes: [Int: Int] = truncateIndexWALs ? indexWALs.mapValues { $0.byteSize } : [:]
         Task.detached { [indicesIO] in
             // `indicesIO` is an actor — this await serializes all concurrent callers so
             // only one save runs at a time. Previously bare Task.detached calls from
@@ -212,6 +273,49 @@ actor TableMutator {
             // spawn concurrently, each encoding ~500 KB × 59 shards simultaneously,
             // causing OOM crashes inside FilePersistence.save → data.write(to:options:.atomic).
             await indicesIO.save(shards: shards)
+            if truncateIndexWALs {
+                await self.truncateIndexWALs(ifSizesMatch: walSizes)
+            }
+        }
+    }
+
+    /// Truncate index WALs whose size is unchanged since the checkpoint snapshot.
+    private func truncateIndexWALs(ifSizesMatch sizes: [Int: Int]) {
+        for (i, w) in indexWALs where sizes[i] == w.byteSize {
+            try? w.truncate()
+        }
+    }
+
+    /// Lazily open (or return) the PQ index WAL for a shard.
+    private func indexWAL(for shardIndex: Int) -> PartitionIndexWAL? {
+        if let w = indexWALs[shardIndex] { return w }
+        let url = FilePersistence.getDefaultURL()
+            .appendingPathComponent("shard-\(nodeId)-\(shardIndex)-indices-wal")
+        guard let w = try? PartitionIndexWAL(url: url) else { return nil }
+        indexWALs[shardIndex] = w
+        return w
+    }
+
+    /// Append one document's PQ index mutation to its shard's index WAL (and an
+    /// `indexRemoved` to the previous shard on a cross-shard upsert). Schedules a
+    /// full indices checkpoint when any WAL crosses the size threshold.
+    private func appendIndexWAL(documentId: DocumentID, table: PartitionTable,
+                                targetShard: Int, previousShard: Int?) {
+        guard targetShard < table.shards.count,
+              let index = table.shards[targetShard].indices[documentId] else { return }
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        guard let payload = try? encoder.encode(index) else { return }
+        if let w = indexWAL(for: targetShard) {
+            try? w.append(.indexPut(documentId: documentId, payload: payload))
+            try? w.append(.commit)
+        }
+        if let prev = previousShard, prev != targetShard, let w = indexWAL(for: prev) {
+            try? w.append(.indexRemoved(documentId: documentId))
+            try? w.append(.commit)
+        }
+        if indexWALs.values.contains(where: { $0.byteSize >= Self.indexWALCheckpointThreshold }) {
+            scheduleIndicesSave()
         }
     }
 
@@ -244,11 +348,9 @@ actor TableMutator {
         if anyWALAppended {
             let anyOverThreshold = wals.contains { _, w in w.byteSize >= Self.walCheckpointThreshold }
             if anyOverThreshold { scheduleCheckpoint() }
-            // Persist indices at WAL cadence so they survive an unclean shutdown
-            // between the put and the 3-second debounce in scheduleIndicesSave().
-            // Without this, restarted servers load an empty indices map and every
-            // HNSW candidate is silently dropped in HNSWShard.search → 0 results.
-            saveIndicesAsync(table)
+            // Index durability at put cadence is handled by appendIndexWAL —
+            // one small append per document instead of the full all-shards
+            // indices rewrite that used to live here.
         } else if tableDirty {
             guard flushTask == nil else { return }
             flushTask = Task {
@@ -271,7 +373,7 @@ actor TableMutator {
         guard indicesDirty, let table = cache.snapshot else {
             indicesFlushTask = nil; return
         }
-        saveIndicesAsync(table)
+        saveIndicesAsync(table, truncateIndexWALs: true)
         indicesDirty      = false
         indicesFlushTask  = nil
     }
@@ -329,6 +431,10 @@ actor TableMutator {
                 logger: indicesTotemLogger.base
             ).save(state: table.shards[i].indices)
         }
+        // All shard indices are checkpointed synchronously above; index WALs are
+        // fully covered and safe to truncate (no concurrent appends — we're on
+        // the actor and shutting down).
+        for (_, w) in indexWALs { try? w.truncate() }
         indicesDirty = false
     }
 
@@ -349,7 +455,7 @@ actor TableMutator {
             }
         }
         if indicesDirty {
-            saveIndicesAsync(table)
+            saveIndicesAsync(table, truncateIndexWALs: true)
             indicesDirty     = false
             indicesFlushTask?.cancel()
             indicesFlushTask = nil
@@ -373,7 +479,7 @@ actor TableMutator {
             }
         }
         if indicesDirty {
-            saveIndicesAsync(table)
+            saveIndicesAsync(table, truncateIndexWALs: true)
             indicesDirty     = false
             indicesFlushTask?.cancel()
             indicesFlushTask = nil
@@ -433,25 +539,18 @@ actor TableMutator {
 
     // MARK: - Mutations
 
-    func put(id: DocumentID, partitions: [Database.Partition], tags: [String] = [], tagsEmbedding: [Float]? = nil, metadata: Data? = nil, request: DatabaseRequest) async {
-        _ = await loadedTable()
-        var table = cache.snapshot ?? PartitionTable()
-        let targetSI: Int
-        if let si = oldestAvailableShard(in: table) {
-            targetSI = si
-        } else {
-            spawnShard(in: &table)
-            targetSI = table.activeShardIndex
-        }
-        savePartitionData(documentId: id, partitions: partitions)
-        table.put(id: id, partitions: partitions, tags: tags, tagsEmbedding: tagsEmbedding,
-                  metadata: metadata, request: request, logger: logger, targetShard: targetSI)
-        scheduleSave(draining: &table)
-        cache.update(table)
-        scheduleIndicesSave()
+    func put(id: DocumentID, partitions: [Database.Partition], tags: [String] = [], tagsEmbedding: [Float]? = nil, metadata: Data? = nil, request: DatabaseRequest, persistPartitionData: Bool = true) async {
+        await putBatch(items: [(id, partitions, tags, tagsEmbedding, metadata, request)],
+                       persistPartitionData: persistPartitionData)
     }
 
-    func putBatch(items: [(id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest)]) async {
+    /// - Parameter persistPartitionData: When true (default), writes each document's
+    ///   `documents/{id}-parts` file before indexing it. `Database.putBatch` passes
+    ///   false — it pre-writes all parts files in a bounded parallel task group
+    ///   *before* calling in, keeping the synchronous plist encode off this actor
+    ///   while preserving the invariant that the parts file is durable before the
+    ///   document becomes searchable.
+    func putBatch(items: [(id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest)], persistPartitionData: Bool = true) async {
         _ = await loadedTable()
         // Process one document per actor turn.
         //
@@ -461,13 +560,13 @@ actor TableMutator {
         // blocking pending flush / checkpoint tasks.
         //
         // Safety: `Database.drain()` is strictly sequential — only one putBatch runs at
-        // a time from the Database actor. The only concurrent path is `tableMutator.put()`
-        // (single-doc). By reloading `cache.snapshot` at the top of each iteration we
-        // incorporate any interleaved single-doc puts, keeping `nodes.count` in sync with
+        // a time from the Database actor. By reloading `cache.snapshot` at the top of
+        // each iteration we incorporate any mutation that interleaved at the previous
+        // yield (single-doc put, remove, compact), keeping `nodes.count` in sync with
         // `store.nodeCount` before each `hnswInsert()`.
         for (id, partitions, tags, tagsEmbedding, metadata, request) in items {
             // Reload from cache each iteration so nodes.count == store.nodeCount.
-            // Any single-doc put() that ran during the previous yield is now visible.
+            // Any mutation that ran during the previous yield is now visible.
             var table = cache.snapshot ?? PartitionTable()
 
             // Route to the oldest shard with physical capacity (post-compaction nodes.count
@@ -479,26 +578,40 @@ actor TableMutator {
                 spawnShard(in: &table)
                 targetSI = table.activeShardIndex
             }
-            savePartitionData(documentId: id, partitions: partitions)
+            if persistPartitionData {
+                savePartitionData(documentId: id, partitions: partitions)
+            }
+            // Capture the document's previous shard before the put — a cross-shard
+            // upsert needs an indexRemoved record appended to the old shard's WAL.
+            let prevSI = table.documentShardIndex[id]
             table.put(id: id, partitions: partitions, tags: tags, tagsEmbedding: tagsEmbedding,
                       metadata: metadata, request: request, logger: logger, targetShard: targetSI)
 
             // Drain WAL records incrementally (keeps per-yield write count small) and
             // commit this document's state to the cache before releasing the actor.
             scheduleSave(draining: &table)
+            // Persist this document's PQ index durably in the same actor turn as
+            // the topology WAL drain — closes the crash window that used to span
+            // the 3-second indices debounce.
+            appendIndexWAL(documentId: id, table: table, targetShard: targetSI, previousShard: prevSI)
             cache.update(table)
 
             // Yield the cooperative thread so flush tasks, checkpoints, and other
             // actor work can interleave between documents.
             await Task.yield()
         }
-        scheduleIndicesSave()
         scheduleCompactIfNeeded()
     }
 
     func remove(id: DocumentID) async {
         FilePersistence(key: "documents/\(id)-parts", kind: .basic, logger: logger.base).purge()
         var table = await loadedTable()
+        // Durably record the index removal before the full save below; replay
+        // applies it even if the crash lands between the two.
+        if let si = table.documentShardIndex[id], let w = indexWAL(for: si) {
+            try? w.append(.indexRemoved(documentId: id))
+            try? w.append(.commit)
+        }
         table.remove(id: id)
         // Drain WAL records from all shards (only the affected shard emits non-empty records).
         for i in table.shards.indices {
@@ -516,7 +629,7 @@ actor TableMutator {
                 self.walByteCounts[i] = 0
             }
         }
-        saveIndicesAsync(table)
+        saveIndicesAsync(table, truncateIndexWALs: true)
     }
 
     func removeAll(documentIds: [DocumentID], request: DatabaseRequest) async {
@@ -525,6 +638,10 @@ actor TableMutator {
         }
         var table = await loadedTable()
         for documentId in documentIds {
+            if let si = table.documentShardIndex[documentId], let w = indexWAL(for: si) {
+                try? w.append(.indexRemoved(documentId: documentId))
+                try? w.append(.commit)
+            }
             table.remove(id: documentId)
         }
         // Drain WAL records from all shards before checkpoint.
@@ -543,7 +660,7 @@ actor TableMutator {
                 self.walByteCounts[i] = 0
             }
         }
-        saveIndicesAsync(table)
+        saveIndicesAsync(table, truncateIndexWALs: true)
         logger.info(
             "Remove All",
             "Purged \(documentIds.count) document(s) from partition table",
@@ -636,6 +753,11 @@ actor TableMutator {
                 }
             }
             cache.update(table)
+            // Compaction must always flush indices and truncate index WALs so a
+            // post-compaction restart replays nothing stale (indices are
+            // docId-keyed, but removed documents' WAL records must not outlive
+            // the checkpoint that reflects their removal).
+            indicesDirty = true
             checkpoint()
         }
         return aggregated
@@ -650,6 +772,6 @@ actor TableMutator {
         compactTask?.cancel()
         compactTask = nil
         checkpoint()
-        saveIndicesAsync(table)
+        saveIndicesAsync(table, truncateIndexWALs: true)
     }
 }

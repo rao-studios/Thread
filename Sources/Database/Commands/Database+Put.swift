@@ -103,8 +103,33 @@ extension Database {
                 )
             }
             let document = Database.Document(id: item.id, url: storage.url, ownerId: request.ownerId, name: item.name)
-            storage.save(state: document)
             prepared.append(Prepared(document: document, partitions: partitions, update: item.update))
+        }
+
+        // Persist document + partition-content files in a bounded parallel task
+        // group, off this actor, BEFORE indexing — the `documents/{id}-parts`
+        // file must be durable before the document becomes searchable (the
+        // search path resolves partition text from it), and TableMutator is told
+        // below (persistPartitionData: false) not to repeat these writes.
+        let loggerBase = logger.base
+        await withTaskGroup(of: Void.self) { group in
+            let writeWidth = 8
+            var inFlight = 0
+            for item in prepared {
+                if inFlight >= writeWidth {
+                    await group.next()
+                    inFlight -= 1
+                }
+                let document = item.document
+                let partitionData = item.partitions.map { PartitionData(from: $0) }
+                group.addTask {
+                    FilePersistence(key: "documents/\(document.id)", kind: .basic, logger: loggerBase)
+                        .save(state: document)
+                    FilePersistence(key: "documents/\(document.id)-parts", kind: .basic, logger: loggerBase)
+                        .save(state: partitionData)
+                }
+                inFlight += 1
+            }
         }
 
         documentCache.cacheBatch(prepared.map { $0.document })
@@ -126,7 +151,9 @@ extension Database {
         let batchItems: [(id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest)] = zip(indexItems, items).map { prepared, item in
             (prepared.document.id, prepared.partitions, item.tags, item.tagsEmbedding, item.metadata, request)
         }
-        await tableMutator.putBatch(items: batchItems)
+        // Parts files were pre-written above — skip the per-document synchronous
+        // plist writes on the TableMutator actor.
+        await tableMutator.putBatch(items: batchItems, persistPartitionData: false)
 
         for item in prepared {
             logger.info(

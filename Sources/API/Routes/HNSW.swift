@@ -8,11 +8,15 @@ private func makeNodeResponse(
     inShard shard: HNSWShard,
     database: Database,
     fullText: Bool = false,
-    allLayerNeighbors: Bool = false
+    allLayerNeighbors: Bool = false,
+    dataLoader: PartitionDataLoader? = nil
 ) -> HNSWNodeResponse {
     let doc = database.document(for: node.documentId)
         ?? Database.Document(id: node.documentId, url: URL(string: "file://unknown")!, ownerId: "")
-    let rawText = database.partitionData(documentId: node.documentId, partitionId: node.partitionId)?.data ?? ""
+    // Batch paths pass a loader (one parts-file decode per document); the
+    // single-node path falls back to a direct read.
+    let rawText = (dataLoader?(node.documentId, node.partitionId)
+        ?? database.partitionData(documentId: node.documentId, partitionId: node.partitionId))?.data ?? ""
     let text = fullText ? rawText : String(rawText.prefix(200))
 
     let neighborIds: [String]
@@ -57,11 +61,21 @@ private func buildGraphResponse(
         shardsToScan = table.shards.enumerated().map { ($0.offset, $0.element) }
     }
 
-    var allNodes: [HNSWNodeResponse] = []
-    for (_, shard) in shardsToScan {
+    // Collect matches first, then resolve text through a per-request loader so
+    // each document's parts file is decoded once — not once per node.
+    var matched: [(shardIndex: Int, node: HNSWGraph.Node)] = []
+    for (si, shard) in shardsToScan {
         for node in shard.nodes where filter(node) {
-            allNodes.append(makeNodeResponse(node, inShard: shard, database: database))
+            matched.append((si, node))
         }
+    }
+    let shardByIndex = Dictionary(uniqueKeysWithValues: shardsToScan)
+    let dataLoader = database.makePartitionDataLoader(for: Set(matched.map { $0.node.documentId }))
+    var allNodes: [HNSWNodeResponse] = []
+    allNodes.reserveCapacity(matched.count)
+    for (si, node) in matched {
+        guard let shard = shardByIndex[si] else { continue }
+        allNodes.append(makeNodeResponse(node, inShard: shard, database: database, dataLoader: dataLoader))
     }
 
     let liveCount = allNodes.filter { !$0.isDeleted }.count
@@ -238,12 +252,16 @@ func registerHNSWRoutes(_ app: some RouterMethods<TotemRequestContext>, _ databa
         guard let table = database.table, !targetPartitionIds.isEmpty else {
             return HNSWNodeBatchResponse(nodes: [])
         }
-        var nodes: [HNSWNodeResponse] = []
+        var matched: [(shard: HNSWShard, node: HNSWGraph.Node)] = []
         for shard in table.shards {
             for pid in targetPartitionIds {
                 guard let idx = shard.partitionLookup[pid], idx < shard.nodes.count else { continue }
-                nodes.append(makeNodeResponse(shard.nodes[idx], inShard: shard, database: database))
+                matched.append((shard, shard.nodes[idx]))
             }
+        }
+        let dataLoader = database.makePartitionDataLoader(for: Set(matched.map { $0.node.documentId }))
+        let nodes = matched.map {
+            makeNodeResponse($0.node, inShard: $0.shard, database: database, dataLoader: dataLoader)
         }
         return HNSWNodeBatchResponse(nodes: nodes)
     }

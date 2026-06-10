@@ -250,4 +250,33 @@ final class Flow3_PartitionIndexTests: XCTestCase {
         let decoded = try JSONDecoder().decode(PartitionIndex.self, from: encoded)
         XCTAssertNil(decoded.metadata, "nil metadata must remain nil after round-trip")
     }
+
+    // MARK: - Top-k selection equivalence
+
+    /// The bounded-insertion top-k selection must return exactly the full-sort
+    /// prefix (same slots, same order) for arbitrary k and slot counts.
+    func testTopKSelectionEqualsFullSortPrefix() {
+        let (index, _) = makeTrainedIndex(count: 60)
+
+        for (qSeed, k) in [(UInt64(1), 1), (2, 3), (3, 10), (4, 59), (5, 60), (6, 200)] {
+            let query = VectorFixtures.random(seed: qSeed)
+
+            // Reference: score every slot, full sort, prefix k.
+            let table = index.pq.buildDistanceTable(queryVector: query)
+            var reference: [(id: String, distance: Float)] = []
+            for slot in index.slots {
+                guard let codes = slot.compressedEmbedding else { continue }
+                reference.append((slot.id, index.pq.computeDistance(table: table, documentCodes: codes)))
+            }
+            reference.sort { $0.distance < $1.distance }
+            let expected = Array(reference.prefix(k))
+
+            let got = index.searchWithScores(queryEmbedding: query, k: k)
+            XCTAssertEqual(got.count, expected.count, "k=\(k)")
+            for (g, e) in zip(got, expected) {
+                XCTAssertEqual(g.1, e.distance, accuracy: 1e-6,
+                    "k=\(k): selection distance must equal full-sort prefix")
+            }
+        }
+    }
 }

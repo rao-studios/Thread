@@ -11,6 +11,7 @@ var packageDependencies: [Package.Dependency] = [
     .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "1.0.0"),
     .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
     .package(url: "https://github.com/rao-studios/Frigate.git", branch: "main"),
+    // .package(path: "../Frigate"),
 ]
 
 var targetDependencies: [Target.Dependency] = [
@@ -24,6 +25,8 @@ var targetDependencies: [Target.Dependency] = [
     .product(name: "MLX", package: "Frigate"),
     .product(name: "MLXLMCommon", package: "Frigate"),
     .product(name: "mlx_embeddings", package: "Frigate"),
+    .product(name: "MLXAccelerate", package: "Frigate"),
+    .product(name: "Frigate", package: "Frigate"),
 ]
 
 let supportedPlatforms: [SupportedPlatform] = [.macOS(.v15)]

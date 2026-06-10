@@ -288,11 +288,12 @@ extension Database {
                 for (shardIndex, w) in capturedOrphans {
                     await capturedMutator.registerOrphanedShardWAL(w, byteCount: w.byteSize, for: shardIndex)
                 }
-                if let existing: [DocumentID: PartitionIndex] = capturedMutator.loadIndicesFromDisk() {
+                if let existing: [Int: [DocumentID: PartitionIndex]] = capturedMutator.loadIndicesFromDisk() {
                     await capturedMutator.mergeIndices(existing)
+                    let total = existing.values.reduce(0) { $0 + $1.count }
                     capturedLogger.info(
                         "Table Init",
-                        "⚜️ Merged \(existing.count) PQ indices for shard-\(capturedNodeId)",
+                        "⚜️ Merged \(total) PQ indices (incl. index-WAL replay) for shard-\(capturedNodeId)",
                         service: .database
                     )
                 }

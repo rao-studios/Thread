@@ -7,6 +7,7 @@
 
 import Foundation
 import Logging
+import MLXAccelerate
 
 /// Each document creates a PartitionIndex. Multiple partitions are a reflection of
 /// the chunking algorithm.
@@ -61,10 +62,11 @@ struct PartitionIndex: Codable {
         var partitions = partitions
         let embeddingVectors = partitions.map { $0.embedding }
 
-        pq.train(vectors: embeddingVectors)
+        // train() returns each training vector's codes — no second encode pass.
+        let codes = pq.train(vectors: embeddingVectors)
 
         for i in 0..<partitions.count {
-            partitions[i].compressedEmbedding = pq.encode(vector: partitions[i].embedding)
+            partitions[i].compressedEmbedding = codes[i]
             partitions[i].embedding = []
         }
 
@@ -112,16 +114,7 @@ struct PartitionIndex: Codable {
                 logger: TotemLogger) -> (result: PartitionSearchResult, adjustment: SinatraAdjustment?) {
 
         let distanceTable = pq.buildDistanceTable(queryVector: queryEmbedding)
-        var results: [(slot: PartitionSlot, distance: Float)] = []
-
-        for slot in slots {
-            guard let compressed = slot.compressedEmbedding else { continue }
-            let distance = pq.computeDistance(table: distanceTable, documentCodes: compressed)
-            results.append((slot, distance))
-        }
-
-        results.sort { $0.distance < $1.distance }
-        let topK = Array(results.prefix(k))
+        let topK = topKSlotsByDistance(table: distanceTable, k: k)
 
         let candidates: [(slot: PartitionSlot, distance: Float)]
         let adjustment: SinatraAdjustment?
@@ -183,17 +176,33 @@ struct PartitionIndex: Codable {
                           k: Int,
                           metadataLoader: PartitionDataLoader? = nil) -> [(Database.Partition, Float)] {
         let distanceTable = pq.buildDistanceTable(queryVector: queryEmbedding)
-        var results: [(slot: PartitionSlot, distance: Float)] = []
+        return topKSlotsByDistance(table: distanceTable, k: k).map { r in
+            (r.slot.toPartition(metadata: metadataLoader?(r.slot.documentId, r.slot.id)), r.distance)
+        }
+    }
+
+    /// ADC-scores every slot and returns the k nearest, distance-ascending.
+    /// Bounded insertion (O(n·log k + k) moves) instead of sorting all n slots —
+    /// k is small (search budget) while documents can hold hundreds of slots.
+    private func topKSlotsByDistance(table: [[Float]], k: Int) -> [(slot: PartitionSlot, distance: Float)] {
+        guard k > 0 else { return [] }
+        var best: [(slot: PartitionSlot, distance: Float)] = []
+        best.reserveCapacity(min(k, slots.count))
 
         for slot in slots {
             guard let compressed = slot.compressedEmbedding else { continue }
-            let distance = pq.computeDistance(table: distanceTable, documentCodes: compressed)
-            results.append((slot, distance))
-        }
+            let distance = pq.computeDistance(table: table, documentCodes: compressed)
+            if best.count == k, distance >= best[best.count - 1].distance { continue }
 
-        results.sort { $0.distance < $1.distance }
-        return Array(results.prefix(k)).map { r in
-            (r.slot.toPartition(metadata: metadataLoader?(r.slot.documentId, r.slot.id)), r.distance)
+            // Binary search for the insertion point (distance-ascending).
+            var lo = 0, hi = best.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if best[mid].distance < distance { lo = mid + 1 } else { hi = mid }
+            }
+            best.insert((slot, distance), at: lo)
+            if best.count > k { best.removeLast() }
         }
+        return best
     }
 }
