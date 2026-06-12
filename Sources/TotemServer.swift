@@ -1,4 +1,5 @@
 import ArgumentParser
+import Conduit
 import Foundation
 import Logging
 import Hummingbird
@@ -103,7 +104,7 @@ struct TotemServer: AsyncParsableCommand {
                 totemGRPCPort: grpcPort,
                 totemHTTPPort: port,
                 requestDispatcher: dispatcher,
-                logger: logger
+                logger: SwiftLogConduitLogger(logger)
             )
             await client.startHeartbeatLoop()
             registerAvailabilityRoute(router, registrationClient: client)

@@ -1,3 +1,4 @@
+import Conduit
 import Hummingbird
 
 private struct AvailabilityRequest: Codable {

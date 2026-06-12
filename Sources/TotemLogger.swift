@@ -4,7 +4,7 @@ import Logging
 struct TotemLogger {
     enum ServicesType: String {
         case sinatra     = "Sinatra"
-        case database        = "Database"
+        case database    = "Database"
         case embedding   = "Embedding"
         case parking     = "Parking"
         case gbtTraining = "GBT Training"

@@ -1,8 +1,11 @@
+import Conduit
 import Foundation
 import GRPCCore
 import Logging
 
-final class MothershipRequestDispatcher: Sendable {
+// SessionRequestHandling lets Conduit's MothershipRegistrationClient route
+// incoming session requests here; handle(_:) below is the witness.
+final class MothershipRequestDispatcher: SessionRequestHandling, Sendable {
     private let queryImpl: TotemQueryServiceImpl
     private let libraryImpl: TotemLibraryServiceImpl
     private let hnswImpl: TotemHNSWServiceImpl
