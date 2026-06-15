@@ -98,6 +98,15 @@ struct TotemServer: AsyncParsableCommand {
 
         // A Totem can dial a Seer mothership and/or a Fleet destination. Both reuse
         // the same destination-agnostic dispatcher (it serves search/library/HNSW).
+        // Strong owners that must outlive `app.runService()`. The registration
+        // clients spawn their heartbeat/session loops with `[weak self]`, so
+        // without an owner here the actor is deallocated the moment its first
+        // session ends — after which the reconnect loop sees a nil `self` and
+        // silently stops. The mothership client happened to survive only because
+        // the availability route closure retained it; the Fleet client had no
+        // such owner and so never reconnected.
+        var registrationClients: [MothershipRegistrationClient] = []
+
         if !mothershipHost.isEmpty || !fleetHost.isEmpty {
             let dispatcher = MothershipRequestDispatcher(
                 database: database,
@@ -118,6 +127,7 @@ struct TotemServer: AsyncParsableCommand {
                 )
                 await client.startHeartbeatLoop()
                 registerAvailabilityRoute(router, registrationClient: client)
+                registrationClients.append(client)
             }
 
             if !fleetHost.isEmpty {
@@ -132,6 +142,7 @@ struct TotemServer: AsyncParsableCommand {
                     logger: SwiftLogConduitLogger(logger)
                 )
                 await fleetClient.startHeartbeatLoop()
+                registrationClients.append(fleetClient)
                 logger.info("Totem: connecting to Fleet destination \(fleetHost):\(fleetGrpcPort)")
             }
         }
@@ -156,6 +167,10 @@ struct TotemServer: AsyncParsableCommand {
             throw error
         }
         await database.shutdown()
+
+        // Keep the registration clients alive across the whole serve loop above;
+        // their session/heartbeat tasks hold only `[weak self]`.
+        withExtendedLifetime(registrationClients) {}
     }
 
     /// Reads the `.env` file from the working directory and injects any
