@@ -46,11 +46,17 @@ struct TotemServer: AsyncParsableCommand {
     @ArgumentParser.Option(name: .long, help: "Mothership (Database) gRPC port.")
     var mothershipGrpcPort: Int = 9091
 
+    @ArgumentParser.Option(name: .long, help: "Fleet destination host (for dataset import). Leave empty to skip.")
+    var fleetHost: String = ""
+
+    @ArgumentParser.Option(name: .long, help: "Fleet destination gRPC port.")
+    var fleetGrpcPort: Int = 9095
+
     @ArgumentParser.Option(name: .long, help: "Fixed node UUID. Overrides any persisted node-id on disk.")
     var nodeId: String?
 
     enum CodingKeys: CodingKey {
-        case host, port, grpcPort, mothershipHost, mothershipGrpcPort, nodeId
+        case host, port, grpcPort, mothershipHost, mothershipGrpcPort, fleetHost, fleetGrpcPort, nodeId
         #if canImport(MLX)
         case useMLX, mlxModel
         #endif
@@ -90,24 +96,44 @@ struct TotemServer: AsyncParsableCommand {
         let grpcServer = TotemGRPCServer()
         await grpcServer.start(database: database, embeddingProvider: embeddingModelProvider, grpcPort: grpcPort)
 
-        if !mothershipHost.isEmpty {
+        // A Totem can dial a Seer mothership and/or a Fleet destination. Both reuse
+        // the same destination-agnostic dispatcher (it serves search/library/HNSW).
+        if !mothershipHost.isEmpty || !fleetHost.isEmpty {
             let dispatcher = MothershipRequestDispatcher(
                 database: database,
                 embeddingProvider: embeddingModelProvider,
                 logger: logger
             )
-            let client = MothershipRegistrationClient(
-                mothershipHost: mothershipHost,
-                mothershipGRPCPort: mothershipGrpcPort,
-                totemId: database.nodeId,
-                totemHost: host,
-                totemGRPCPort: grpcPort,
-                totemHTTPPort: port,
-                requestDispatcher: dispatcher,
-                logger: SwiftLogConduitLogger(logger)
-            )
-            await client.startHeartbeatLoop()
-            registerAvailabilityRoute(router, registrationClient: client)
+
+            if !mothershipHost.isEmpty {
+                let client = MothershipRegistrationClient(
+                    mothershipHost: mothershipHost,
+                    mothershipGRPCPort: mothershipGrpcPort,
+                    totemId: database.nodeId,
+                    totemHost: host,
+                    totemGRPCPort: grpcPort,
+                    totemHTTPPort: port,
+                    requestDispatcher: dispatcher,
+                    logger: SwiftLogConduitLogger(logger)
+                )
+                await client.startHeartbeatLoop()
+                registerAvailabilityRoute(router, registrationClient: client)
+            }
+
+            if !fleetHost.isEmpty {
+                let fleetClient = MothershipRegistrationClient(
+                    mothershipHost: fleetHost,
+                    mothershipGRPCPort: fleetGrpcPort,
+                    totemId: database.nodeId,
+                    totemHost: host,
+                    totemGRPCPort: grpcPort,
+                    totemHTTPPort: port,
+                    requestDispatcher: dispatcher,
+                    logger: SwiftLogConduitLogger(logger)
+                )
+                await fleetClient.startHeartbeatLoop()
+                logger.info("Totem: connecting to Fleet destination \(fleetHost):\(fleetGrpcPort)")
+            }
         }
 
         // ── Build Application AFTER all routes are registered ────────────────────
