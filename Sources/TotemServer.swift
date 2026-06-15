@@ -41,7 +41,7 @@ struct TotemServer: AsyncParsableCommand {
     var grpcPort: Int = 9090
 
     @ArgumentParser.Option(name: .long, help: "Mothership (Database) host. Leave empty to run standalone.")
-    var mothershipHost: String = "127.0.0.1"
+    var mothershipHost: String = ""
 
     @ArgumentParser.Option(name: .long, help: "Mothership (Database) gRPC port.")
     var mothershipGrpcPort: Int = 9091
@@ -50,7 +50,7 @@ struct TotemServer: AsyncParsableCommand {
     var fleetHost: String = ""
 
     @ArgumentParser.Option(name: .long, help: "Fleet destination gRPC port.")
-    var fleetGrpcPort: Int = 9095
+    var fleetGrpcPort: Int = 9092
 
     @ArgumentParser.Option(name: .long, help: "Fixed node UUID. Overrides any persisted node-id on disk.")
     var nodeId: String?

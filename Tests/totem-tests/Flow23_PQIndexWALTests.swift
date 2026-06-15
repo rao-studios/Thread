@@ -4,10 +4,11 @@
 //
 //  Crash-consistency for PQ indices. Before the index WAL, a crash between an
 //  HNSW insert and the (debounced) full indices flush lost the document's PQ
-//  index permanently — markIndicesReady() tombstoned the orphaned HNSW nodes
-//  and the document required re-indexing. The WAL closes that window to a
-//  single append per put; these tests cover the record format, crash replay,
-//  and removal semantics.
+//  index until re-indexed. The WAL closes that window to a single append per
+//  put. markIndicesReady() no longer tombstones missing-index nodes — they are
+//  preserved (recoverable from raw vectors + `-parts`) and reported only. These
+//  tests cover the record format, crash replay, non-destructive recovery, and
+//  removal semantics.
 //
 
 import XCTest
@@ -166,6 +167,48 @@ final class Flow23_PQIndexWALTests: XCTestCase {
         }
         let deleted = restored.shards.reduce(0) { $0 + $1.graphStats.deletedNodes }
         XCTAssertEqual(deleted, 0, "No HNSW nodes may be tombstoned after WAL recovery")
+    }
+
+    // MARK: - 2b. markIndicesReady never deletes unrecoverable orphans
+
+    /// Regression guard: if a PQ index is genuinely missing at startup (no
+    /// checkpoint, no WAL to recover it), markIndicesReady() must PRESERVE the
+    /// HNSW node — its raw vector and `-parts` text are still on disk, so it is
+    /// recoverable by re-indexing. The old behavior tombstoned these nodes via
+    /// `table.remove(id:)`, silently and irreversibly destroying recoverable data
+    /// on the first restart after the index-persistence rewrite.
+    func testMarkIndicesReadyPreservesUnrecoverableOrphans() async throws {
+        let mutator = try makeMutator()
+        await mutator.putBatch(items: makeItems(3))
+
+        guard var table = mutator.snapshot else {
+            return XCTFail("Snapshot must exist after putBatch")
+        }
+        XCTAssertEqual(table.keys.count, 3)
+
+        // Drop one document's PQ index but leave its key + HNSW nodes intact, and
+        // keep at least one other index present so the empty-indices guard doesn't
+        // short-circuit the inspection.
+        let victim = "wal-doc1"
+        for i in table.shards.indices {
+            table.shards[i].indices.removeValue(forKey: victim)
+        }
+        XCTAssertNil(table.index(for: victim), "Victim index must be absent for the test setup")
+        XCTAssertTrue(table.keys.contains(victim), "Victim key must remain in the graph")
+        mutator.seed(table)
+
+        await mutator.markIndicesReady()
+
+        guard let after = mutator.snapshot else {
+            return XCTFail("Snapshot must exist after markIndicesReady")
+        }
+        XCTAssertEqual(after.keys.count, 3,
+            "markIndicesReady must not remove orphaned keys — data is recoverable")
+        XCTAssertTrue(after.keys.contains(victim),
+            "Orphaned document must be preserved, not tombstoned")
+        let deleted = after.shards.reduce(0) { $0 + $1.graphStats.deletedNodes }
+        XCTAssertEqual(deleted, 0,
+            "No HNSW nodes may be tombstoned for a missing-but-recoverable PQ index")
     }
 
     // MARK: - 3. Removal — no resurrection on restart

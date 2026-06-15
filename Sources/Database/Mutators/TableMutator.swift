@@ -213,29 +213,30 @@ actor TableMutator {
     func markIndicesReady() {
         guard !_indicesReady else { return }
 
-        // Tombstone HNSW nodes for documents whose PQ index was lost — indexed after
-        // the last indices-file flush, then the server crashed before the 3s debounce
-        // fired. WAL restores the graph nodes; the stale indices file has no entry.
-        // These docs will never resolve in search until re-indexed, so mark them
-        // deleted now so HNSW stops returning them as unresolvable candidates.
+        // Report — but never delete — documents whose PQ index isn't loaded yet.
         //
-        // Guard: if indices is completely empty but keys is non-empty, the guardian
-        // deadline fired before mergeIndices() ran (loadIndicesFromDisk took >300 s).
-        // In that case every key would look orphaned — skip tombstoning and let the
-        // real markIndicesReady() call (from the Phase 5 Task) handle it once
-        // mergeIndices completes. The guardian only unblocks waiters here.
-        if var table = cache.snapshot, table.shards.contains(where: { !$0.indices.isEmpty }) {
+        // An "orphan" here is a key in the graph with no resolvable PQ index. This is
+        // NOT proof of permanent loss: the index may simply not have replayed yet, or
+        // the indices checkpoint may lag the topology WAL after an upgrade/unclean
+        // shutdown. The document's raw vector (mmap vector store) and partition text
+        // (`documents/{id}-parts`) are still on disk, so the entry is recoverable by
+        // re-indexing. Deleting it here is destructive and irreversible — the previous
+        // `table.remove(id:)` tombstoning silently wiped recoverable data on the first
+        // restart after the index-persistence rewrite.
+        //
+        // Leaving orphans in place is safe for search: HNSWShard resolution skips any
+        // candidate whose `indices[documentId]` is nil (HNSWShard.swift), so an
+        // unresolved node is simply omitted from results until its index is present.
+        //
+        // Guard: only inspect once at least one shard has indices loaded — if indices
+        // are entirely empty while keys are non-empty, the guardian deadline fired
+        // before mergeIndices() ran and every key would look orphaned. Skip the report
+        // in that case; the real markIndicesReady() call logs once mergeIndices completes.
+        if let table = cache.snapshot, table.shards.contains(where: { !$0.indices.isEmpty }) {
             let orphanedIds = table.keys.filter { table.index(for: $0) == nil }
             if !orphanedIds.isEmpty {
-                for id in orphanedIds {
-                    table.remove(id: id)
-                }
-                for i in table.shards.indices {
-                    table.shards[i].pendingWALRecords = []
-                }
-                cache.update(table)
                 logger.warning(
-                    "⚠️ [Table Init] Tombstoned \(orphanedIds.count) orphaned HNSW node(s) — PQ index missing after crash; re-index required: \(orphanedIds.prefix(5))",
+                    "⚠️ [Table Init] \(orphanedIds.count) HNSW node(s) have no loaded PQ index — preserved, not deleted; will resolve once indices load or after re-index: \(orphanedIds.prefix(5))",
                     service: .database
                 )
             }

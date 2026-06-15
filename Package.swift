@@ -48,6 +48,7 @@ let package = Package(
       name: "totem-tests",
       dependencies: [
         "totem",
+        .product(name: "Conduit", package: "Conduit"),
         .product(name: "HummingbirdTesting", package: "hummingbird"),
       ],
       path: "Tests/totem-tests"
