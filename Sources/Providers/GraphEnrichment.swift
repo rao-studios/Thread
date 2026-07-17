@@ -22,6 +22,7 @@ enum GraphEnrichment {
                     existingGraph: GraphStore?,
                     logger: Logger) async -> [Database.BatchPutItem] {
         var result = items
+        let policy = ExtractionPolicyStore.current
 
         // ── 1. LLM extraction for flagged items ──────────────────────────────────
         var extractedDocIndices = Set<Int>()
@@ -38,6 +39,13 @@ enum GraphEnrichment {
                     logger.warning("Graph extraction failed for doc \(result[i].id): \(error) — keeping keyword entities")
                 }
             }
+        }
+
+        // ── 1b. Policy passes: predicate aliases + co-mention auto-edges ─────────
+        for i in result.indices {
+            result[i].graph = applyPolicyEdges(
+                to: result[i].graph, policy: policy, existingGraph: existingGraph
+            )
         }
 
         // ── 2. Batch-embed new entity strings + doc-level strings for extracted docs ──
@@ -96,6 +104,107 @@ enum GraphEnrichment {
             }
         }
 
+        // ── 4. Similarity auto-edges (needs the fresh embeddings from step 3) ────
+        if let rule = policy.similarity, rule.enabled, let existingGraph {
+            for i in result.indices {
+                result[i].graph = addSimilarityEdges(
+                    to: result[i].graph, rule: rule,
+                    hubCap: policy.hubDegreeCap, existingGraph: existingGraph
+                )
+            }
+        }
+
         return result
+    }
+
+    // MARK: - Policy passes
+
+    /// Applies predicate aliases and (when enabled) co-mention auto-edges: every
+    /// pair of entities extracted from the same document gets a weighted
+    /// `auto:<predicate>` edge unless already explicitly linked or hub-capped.
+    static func applyPolicyEdges(
+        to payload: Database.GraphPayload,
+        policy: ExtractionPolicy,
+        existingGraph: GraphStore?
+    ) -> Database.GraphPayload {
+        var payload = payload
+
+        // Predicate normalization (skip already-namespaced auto edges).
+        if !policy.predicateAliases.isEmpty {
+            for i in payload.relationships.indices
+            where !payload.relationships[i].predicate.hasPrefix(ExtractionPolicy.autoPredicatePrefix) {
+                payload.relationships[i].predicate =
+                    policy.normalizePredicate(payload.relationships[i].predicate)
+            }
+        }
+
+        guard let rule = policy.coMention, rule.enabled, payload.entities.count > 1 else {
+            return payload
+        }
+
+        let autoPredicate = ExtractionPolicy.autoPredicatePrefix + rule.predicate
+        let explicitPairs: Set<String> = Set(payload.relationships.map { rel in
+            [GraphStore.normalizeName(rel.subject), GraphStore.normalizeName(rel.object)]
+                .sorted().joined(separator: "|")
+        })
+
+        func degree(_ entity: Database.GraphPayload.EntityIn) -> Int {
+            guard let graph = existingGraph else { return 0 }
+            let id = GraphStore.entityID(kind: entity.kind, name: entity.name)
+            return graph.adjacency[id]?.count ?? 0
+        }
+
+        let cap = policy.hubDegreeCap ?? Int.max
+        for a in 0..<(payload.entities.count - 1) {
+            for b in (a + 1)..<payload.entities.count {
+                let first = payload.entities[a]
+                let second = payload.entities[b]
+                let pairKey = [GraphStore.normalizeName(first.name), GraphStore.normalizeName(second.name)]
+                    .sorted().joined(separator: "|")
+                if rule.skipExplicitlyLinked, explicitPairs.contains(pairKey) { continue }
+                if degree(first) >= cap || degree(second) >= cap { continue }
+                payload.relationships.append(.init(
+                    subject: first.name, predicate: autoPredicate, object: second.name
+                ))
+            }
+        }
+        return payload
+    }
+
+    /// Bridges a document's new entities to semantically-close existing entities
+    /// (`auto:related to`) using cosine over the "kind: name" embeddings.
+    static func addSimilarityEdges(
+        to payload: Database.GraphPayload,
+        rule: ExtractionPolicy.SimilarityRule,
+        hubCap: Int?,
+        existingGraph: GraphStore
+    ) -> Database.GraphPayload {
+        var payload = payload
+        let autoPredicate = ExtractionPolicy.autoPredicatePrefix + rule.predicate
+        let cap = hubCap ?? Int.max
+
+        for entity in payload.entities {
+            guard let embedding = entity.embedding else { continue }
+            let selfId = GraphStore.entityID(kind: entity.kind, name: entity.name)
+            if (existingGraph.adjacency[selfId]?.count ?? 0) >= cap { continue }
+
+            var scored: [(name: String, score: Float)] = []
+            for existing in existingGraph.entities.values {
+                guard existing.id != selfId,
+                      let stored = existing.embedding,
+                      stored.count == embedding.count,
+                      (existingGraph.adjacency[existing.id]?.count ?? 0) < cap else { continue }
+                let score = GraphStore.dot(stored, embedding)
+                if score >= rule.cosineThreshold {
+                    scored.append((existing.name, score))
+                }
+            }
+            for match in scored.sorted(by: { $0.score > $1.score }).prefix(rule.maxEdgesPerEntity) {
+                payload.relationships.append(.init(
+                    subject: entity.name, predicate: autoPredicate, object: match.name
+                ))
+            }
+        }
+        return payload
     }
 }

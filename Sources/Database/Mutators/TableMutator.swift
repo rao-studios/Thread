@@ -129,6 +129,96 @@ actor TableMutator {
         )
     }
 
+    // MARK: - Graph mutations
+
+    enum GraphMutation {
+        case deleteEntity(EntityID)
+        case deleteRelationship(RelationshipID)
+        case renameEntity(EntityID, newName: String)
+        case mergeEntities(from: EntityID, into: EntityID)
+        case setEntityKind(EntityID, kind: String)
+    }
+
+    /// Applies a granular graph edit atomically with the `PartitionIndex.entityIds`
+    /// rewrite for every affected document, then persists both stores immediately.
+    /// Returns the surviving entity id for re-key operations.
+    @discardableResult
+    func mutateGraph(_ mutation: GraphMutation) async -> EntityID? {
+        var table = await loadedTable()
+        var graphStore = await loadedGraph()
+
+        let oldId: EntityID?
+        let result: GraphStore.MutationResult
+        switch mutation {
+        case .deleteEntity(let id):
+            oldId = id
+            result = graphStore.deleteEntity(id: id)
+        case .deleteRelationship(let id):
+            oldId = nil
+            graphStore.deleteRelationship(id: id)
+            result = .init(survivingId: nil, affectedDocumentIds: [])
+        case .renameEntity(let id, let newName):
+            oldId = id
+            result = graphStore.renameEntity(id: id, newName: newName)
+        case .mergeEntities(let from, let into):
+            oldId = from
+            result = graphStore.mergeEntities(from: from, into: into)
+        case .setEntityKind(let id, let kind):
+            oldId = id
+            result = graphStore.setEntityKind(id: id, kind: kind)
+        }
+
+        // Rewrite entity linkage on every affected document's index.
+        if let oldId, !result.affectedDocumentIds.isEmpty {
+            for documentId in result.affectedDocumentIds {
+                guard var index = table.indices[documentId] else { continue }
+                if let survivingId = result.survivingId {
+                    index.entityIds = index.entityIds.map { $0 == oldId ? survivingId : $0 }
+                    // Dedup while preserving order (merge can collapse two ids into one).
+                    var seen = Set<EntityID>()
+                    index.entityIds = index.entityIds.filter { seen.insert($0).inserted }
+                } else {
+                    index.entityIds.removeAll { $0 == oldId }
+                }
+                table.indices[documentId] = index
+            }
+        }
+
+        cache.update(table)
+        graphCache.update(graphStore)
+        await saveBoth(table, graphStore)
+        return result.survivingId
+    }
+
+    /// Replaces a document's graph contribution: detaches its old entity linkage,
+    /// upserts the freshly extracted payload, and updates the index's entity ids
+    /// and doc-level entity embedding. Used by re-extraction.
+    func reapplyGraph(documentId: DocumentID,
+                      payload: Database.GraphPayload,
+                      entityEmbedding: [Float]?,
+                      request: DatabaseRequest) async {
+        var table = await loadedTable()
+        var graphStore = await loadedGraph()
+        guard var index = table.indices[documentId] else { return }
+
+        graphStore.detach(documentId: documentId, entityIds: index.entityIds)
+        let entityIds = graphStore.upsert(payload, documentId: documentId)
+        index.entityIds = entityIds
+        if let entityEmbedding { index.entityEmbedding = entityEmbedding }
+        table.indices[documentId] = index
+
+        cache.update(table)
+        graphCache.update(graphStore)
+        await saveBoth(table, graphStore)
+        logger.info(
+            "Graph Re-extract",
+            "Re-applied graph for \(documentId) — \(entityIds.count) entity(ies), \(payload.relationships.count) relationship(s)",
+            service: .database,
+            request: request,
+            flow: .embed(documentId: documentId)
+        )
+    }
+
     /// Replaces the entire in-memory table and persists immediately.
     func replace(with table: PartitionTable) async {
         cache.update(table)

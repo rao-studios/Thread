@@ -21,6 +21,8 @@ func configureRoutes(
                                  graphExtractor: graphExtractor)
     registerLibraryRoute(router, database)
     registerGraphRoute(router, database, embeddingModelProvider: embeddingModelProvider)
+    registerGraphAdminRoutes(router, database, embeddingModelProvider: embeddingModelProvider,
+                             graphExtractor: graphExtractor)
 }
 
 @main

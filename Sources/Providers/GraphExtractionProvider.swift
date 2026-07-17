@@ -17,8 +17,11 @@ protocol GraphExtracting: Sendable {
 /// Always available (pure Swift, no MLX), used when on-device extraction is disabled or fails.
 struct KeywordGraphExtractionProvider: GraphExtracting {
     func extract(from texts: [String], logger: Logger) async throws -> Database.GraphPayload {
-        Database.GraphPayload(
-            entities: TagGenerator.generate(from: texts).map { .init(name: $0, kind: "concept") }
+        let cap = ExtractionPolicyStore.current.maxEntities
+        return Database.GraphPayload(
+            entities: TagGenerator.generate(from: texts)
+                .prefix(cap)
+                .map { .init(name: $0, kind: "concept") }
         )
     }
 }
@@ -41,7 +44,13 @@ enum GraphExtractionParser {
     /// Parses and validates the model's response into a `GraphPayload`.
     /// Accepts bare JSON or JSON wrapped in prose / code fences (extracts the outermost braces).
     /// Throws when no JSON object is present or it cannot be decoded.
-    static func parse(_ response: String) throws -> Database.GraphPayload {
+    /// Caps and kind validation come from the active `ExtractionPolicy` (overridable for tests).
+    static func parse(_ response: String, policy: ExtractionPolicy? = nil) throws -> Database.GraphPayload {
+        let policy = policy ?? ExtractionPolicyStore.current
+        let entityCap = min(policy.maxEntities, maxEntities)
+        let relationshipCap = min(policy.maxRelationships, maxRelationships)
+        let allowedKinds = Set(policy.kinds.map { GraphStore.normalizeKind($0.name) })
+
         guard let first = response.firstIndex(of: "{"),
               let last = response.lastIndex(of: "}"),
               first < last else {
@@ -60,12 +69,16 @@ enum GraphExtractionParser {
         for e in raw.entities ?? [] {
             let name = e.name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty else { continue }
-            let kind = GraphStore.normalizeKind(e.kind ?? "concept")
+            var kind = GraphStore.normalizeKind(e.kind ?? "concept")
+            if !allowedKinds.isEmpty, !allowedKinds.contains(kind) {
+                // Out-of-ontology kinds coerce to the closest generic bucket.
+                kind = allowedKinds.contains("concept") ? "concept" : (allowedKinds.first ?? "concept")
+            }
             let key = "\(kind)|\(GraphStore.normalizeName(name))"
             guard seenEntityKeys.insert(key).inserted else { continue }
             entities.append(.init(name: name, kind: kind))
             nameSet.insert(GraphStore.normalizeName(name))
-            if entities.count >= maxEntities { break }
+            if entities.count >= entityCap { break }
         }
 
         // Validate relationships — subject/object must reference a known entity name.
@@ -74,27 +87,22 @@ enum GraphExtractionParser {
         for r in raw.relationships ?? [] {
             let subject = r.subject.trimmingCharacters(in: .whitespacesAndNewlines)
             let object = r.object.trimmingCharacters(in: .whitespacesAndNewlines)
-            let predicate = r.predicate.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let predicate = policy.normalizePredicate(r.predicate)
             guard !predicate.isEmpty,
                   nameSet.contains(GraphStore.normalizeName(subject)),
                   nameSet.contains(GraphStore.normalizeName(object)) else { continue }
             let key = "\(GraphStore.normalizeName(subject))|\(predicate)|\(GraphStore.normalizeName(object))"
             guard seenRelKeys.insert(key).inserted else { continue }
             relationships.append(.init(subject: subject, predicate: predicate, object: object))
-            if relationships.count >= maxRelationships { break }
+            if relationships.count >= relationshipCap { break }
         }
 
         return Database.GraphPayload(entities: entities, relationships: relationships)
     }
 
-    static let systemPrompt = """
-    You extract a knowledge graph from text. Respond with ONLY a JSON object — no prose, no code fences:
-    {"entities":[{"name":"...","kind":"person|organization|place|event|work|concept|other"}],\
-    "relationships":[{"subject":"...","predicate":"...","object":"..."}]}
-    Rules: at most 12 entities and 15 relationships; subject and object MUST exactly match a name \
-    from entities; predicates are short lowercase verb phrases ("founded","works at","part of"); \
-    keep original name casing; no duplicates.
-    """
+    /// Built-in fallback prompt — the live prompt comes from
+    /// `ExtractionPolicyStore.current.effectiveSystemPrompt`.
+    static let systemPrompt = ExtractionPolicy().effectiveSystemPrompt
 }
 
 #if canImport(MLX)
@@ -117,14 +125,15 @@ actor MLXGraphExtractionProvider: GraphExtracting {
 
     func extract(from texts: [String], logger: Logger) async throws -> Database.GraphPayload {
         let container = try await loadedModel(logger: logger)
+        let policy = ExtractionPolicyStore.current
         let input = String(texts.joined(separator: " ").prefix(maxInputChars))
         let session = ChatSession(
             container,
-            instructions: GraphExtractionParser.systemPrompt,
+            instructions: policy.effectiveSystemPrompt,
             generateParameters: GenerateParameters(maxTokens: 800, temperature: 0)
         )
         let response = try await session.respond(to: input)
-        return try GraphExtractionParser.parse(response)
+        return try GraphExtractionParser.parse(response, policy: policy)
     }
 
     private func loadedModel(logger: Logger) async throws -> ModelContainer {
