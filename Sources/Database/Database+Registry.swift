@@ -3,7 +3,26 @@ import Foundation
 extension Database {
     func initializeRegistry() {
         let storage = registryStore
-        var registry: TotemRegistry = storage.restore() ?? .init()
+        // One-time migration from the legacy shared `registry` file: earlier
+        // builds kept one registry for every node on the machine, which let
+        // each node's boot sweeps reap the other nodes' documents. The legacy
+        // file seeds this node's first scoped registry and is left in place
+        // for any node that has not migrated yet.
+        var registry: TotemRegistry
+        if let scoped: TotemRegistry = storage.restore() {
+            registry = scoped
+        } else if let legacy: TotemRegistry = FilePersistence(
+            key: "registry", kind: .basic, logger: logger.base).restore() {
+            registry = legacy
+            storage.save(state: registry)
+            logger.info(
+                "Registry Init",
+                "Migrated legacy shared registry → registry-\(nodeId)",
+                service: .database
+            )
+        } else {
+            registry = .init()
+        }
 
         if registry.availableDocumentIds.isEmpty && !registry.documentAccess.isEmpty {
             registry.availableDocumentIds = Set(
@@ -79,7 +98,7 @@ extension Database {
     }
 
     var registryStore: FilePersistence {
-        FilePersistence(key: "registry", kind: .basic, logger: logger.base)
+        FilePersistence(key: "registry-\(nodeId)", kind: .basic, logger: logger.base)
     }
 }
 

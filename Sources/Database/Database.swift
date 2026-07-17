@@ -35,7 +35,7 @@ actor Database {
         self.nodeId = identity.nodeId
 
         self.tableMutator = TableMutator(nodeId: identity.nodeId, logger: TotemLogger(baseLogger))
-        self.registryMutator = RegistryMutator(logger: TotemLogger(baseLogger))
+        self.registryMutator = RegistryMutator(nodeId: identity.nodeId, logger: TotemLogger(baseLogger))
         self.initializationTask = Task { [self] in
             await self.startup()
         }

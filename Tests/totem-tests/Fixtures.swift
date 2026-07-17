@@ -85,7 +85,10 @@ extension TableMutator {
 
 extension RegistryMutator {
     static func test() -> RegistryMutator {
-        let m = RegistryMutator(logger: .test)
+        let m = RegistryMutator(
+            nodeId: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            logger: .test
+        )
         m.seed(TotemRegistry())
         return m
     }

@@ -140,8 +140,11 @@ extension Database {
                 for id in missingIndexIds {
                     registry.removeOrphaned(documentId: id)
                     documentCache.evict(id)
-                    documentStore(for: id).purge()
-                    partitionStore(for: id).purge()
+                    // Deliberately no file purge: `documents/` is shared and
+                    // content-addressed across co-located nodes, so deleting
+                    // here can destroy another node's document/parts files.
+                    // Dedup gates on `table.keys`, and re-ingest rewrites the
+                    // files — an orphaned file is harmless, deletion is not.
                 }
                 registryStore.save(state: registry)
                 registryMutator.seed(registry)

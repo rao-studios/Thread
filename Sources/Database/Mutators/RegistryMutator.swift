@@ -25,9 +25,13 @@ actor RegistryMutator {
     private var registryDirty = false
     private var flushTask: Task<Void, Never>?
 
-    init(logger: TotemLogger) {
+    /// The registry is node-scoped (`registry-<nodeId>`), like the table and
+    /// graph. A single shared `registry` file let every co-located node's boot
+    /// sweeps treat the other nodes' documents as orphans — each restart
+    /// reaped every other node's registrations.
+    init(nodeId: UUID, logger: TotemLogger) {
         self.cache = TotemCache(
-            persistence: FilePersistence(key: "registry", kind: .basic, logger: logger.base)
+            persistence: FilePersistence(key: "registry-\(nodeId)", kind: .basic, logger: logger.base)
         )
         self.logger = logger
     }
