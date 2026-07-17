@@ -105,6 +105,42 @@ enum GraphExtractionParser {
     static let systemPrompt = ExtractionPolicy().effectiveSystemPrompt
 }
 
+/// Mistral-API extractor: same prompt/parse contract as the on-device MLX
+/// provider, no local model. Uses the same `MISTRAL_API_KEY` the embedding
+/// provider already reads. Failures throw — GraphEnrichment catches and keeps
+/// the keyword entities, so extraction never fails ingest.
+actor MistralGraphExtractionProvider: GraphExtracting {
+    private let model: String
+    private let maxInputChars: Int
+    private let network: NetworkService
+
+    init(model: String = "mistral-tiny", maxInputChars: Int = 3_000, logger: Logger) {
+        self.model = model
+        self.maxInputChars = maxInputChars
+        self.network = NetworkService(logger: logger)
+    }
+
+    func extract(from texts: [String], logger: Logger) async throws -> Database.GraphPayload {
+        let policy = ExtractionPolicyStore.current
+        let input = String(texts.joined(separator: " ").prefix(maxInputChars))
+        let response = try await network.request(
+            Requests.Chat.Get(
+                model: model,
+                messages: [
+                    .init(role: "system", content: policy.effectiveSystemPrompt),
+                    .init(role: "user", content: input),
+                ],
+                maxTokens: 800,
+                temperature: 0
+            )
+        )
+        guard let content = response.choices.first?.message.content else {
+            throw GraphExtractionParser.ParseError.noJSONObject
+        }
+        return try GraphExtractionParser.parse(content, policy: policy)
+    }
+}
+
 #if canImport(MLX)
 import MLX
 import MLXLMCommon

@@ -228,6 +228,20 @@ actor TableMutator {
         await cache.saveNow(table)
     }
 
+    /// Wipes this node's partition table and graph and persists the empty
+    /// stores immediately. Shared `documents/` files are untouched — they are
+    /// content-addressed and may be referenced by co-located nodes.
+    func clearAll() async {
+        flushTask?.cancel()
+        flushTask = nil
+        dirty = false
+        let table = PartitionTable()
+        let graphStore = GraphStore()
+        cache.update(table)
+        graphCache.update(graphStore)
+        await saveBoth(table, graphStore)
+    }
+
     // MARK: - Graceful shutdown
 
     func flushAllForShutdown() async {

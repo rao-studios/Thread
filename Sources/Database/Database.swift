@@ -51,6 +51,29 @@ actor Database {
         await tableMutator.flushAllForShutdown()
         await registryMutator.flushForShutdown()
     }
+
+    /// Clears this node's entire database — partition table, graph, registry,
+    /// and document cache — persisting the empty stores immediately. Shared
+    /// content-addressed files under `documents/` are left in place (other
+    /// co-located nodes may reference them; re-ingest reuses or rewrites them).
+    /// Returns the removed counts for the caller's response.
+    func clearAll() async -> (documents: Int, entities: Int) {
+        // Drain pending writes first so nothing re-populates after the wipe.
+        while isProcessing || !pending.isEmpty {
+            await Task.yield()
+        }
+        let documentCount = table?.keys.count ?? 0
+        let entityCount = graph?.entities.count ?? 0
+        await tableMutator.clearAll()
+        await registryMutator.clearAll()
+        documentCache.seed([:])
+        logger.info(
+            "Clear",
+            "🧹 Cleared node database — \(documentCount) document(s), \(entityCount) entity(ies) removed",
+            service: .database
+        )
+        return (documentCount, entityCount)
+    }
 }
 
 extension Database {

@@ -63,6 +63,16 @@ actor RegistryMutator {
         Task { await self.cache.saveNow(registry) }
     }
 
+    /// Wipes this node's registry and persists the empty state immediately.
+    func clearAll() async {
+        flushTask?.cancel()
+        flushTask = nil
+        registryDirty = false
+        let empty = TotemRegistry()
+        cache.update(empty)
+        await cache.saveNow(empty)
+    }
+
     /// Durably flushes the registry to disk. Call from `Database.shutdown()`.
     func flushForShutdown() async {
         guard let registry = cache.snapshot else { return }

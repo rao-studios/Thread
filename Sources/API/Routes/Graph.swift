@@ -10,13 +10,12 @@ func registerGraphRoute(
         let graphReq = try await request.decode(as: GraphRequest.self, context: context)
         let databaseReq = graphReq.totem.withRequestID(context.id)
 
-        guard graphReq.entity != nil || graphReq.query != nil else {
-            throw HTTPError(.badRequest, message: "Provide 'entity' and/or 'query'.")
-        }
+        // No entity/query → browse mode: graphQuery returns the whole graph
+        // (kind-filtered, capped by mention count).
 
         // Embed the free-text query for entity similarity matching.
         var queryVector: [Float]?
-        if let query = graphReq.query {
+        if let query = graphReq.query, !query.isEmpty {
             let embeds = try await StandaloneGeneration.runEmbedding(
                 [query], modelProvider: embeddingModelProvider, logger: database.logger.base, priority: true
             )

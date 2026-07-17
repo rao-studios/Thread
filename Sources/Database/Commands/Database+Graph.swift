@@ -35,15 +35,38 @@ extension Database {
     nonisolated func graphQuery(_ query: GraphQuery, request: DatabaseRequest) -> GraphQueryResult {
         guard let graph = self.graph, !graph.entities.isEmpty else { return GraphQueryResult() }
 
-        let matches = graph.matchEntities(
-            nameQuery: query.entity, embedding: query.queryVector,
-            kinds: query.kinds, limit: query.limit
-        )
-        let scoreById = Dictionary(matches.map { ($0.entity.id, $0.score) }, uniquingKeysWith: max)
-        let seeds = Set(matches.map { $0.entity.id })
+        let scoreById: [EntityID: Float]
+        let reachedEntities: Set<EntityID>
+        let reachedEdges: Set<RelationshipID>
 
-        let hops = min(max(query.hops, 0), 3)
-        let (reachedEntities, reachedEdges) = graph.neighborhood(of: seeds, hops: hops)
+        let browsing = (query.entity?.isEmpty ?? true)
+            && (query.queryVector?.isEmpty ?? true)
+        if browsing {
+            // Browse mode — no seeds given: show the whole graph, kind-filtered
+            // and capped by mention count so dense graphs stay renderable.
+            let filtered = graph.entities.values.filter { entity in
+                guard let kinds = query.kinds, !kinds.isEmpty else { return true }
+                return kinds.contains(entity.kind)
+            }
+            let top = filtered
+                .sorted { ($0.mentionCount, $0.name) > ($1.mentionCount, $1.name) }
+                .prefix(max(query.limit, 1))
+            reachedEntities = Set(top.map(\.id))
+            reachedEdges = Set(graph.relationships.values.filter {
+                reachedEntities.contains($0.subjectId) && reachedEntities.contains($0.objectId)
+            }.map(\.id))
+            scoreById = [:]
+        } else {
+            let matches = graph.matchEntities(
+                nameQuery: query.entity, embedding: query.queryVector,
+                kinds: query.kinds, limit: query.limit
+            )
+            scoreById = Dictionary(matches.map { ($0.entity.id, $0.score) }, uniquingKeysWith: max)
+            let seeds = Set(matches.map { $0.entity.id })
+
+            let hops = min(max(query.hops, 0), 3)
+            (reachedEntities, reachedEdges) = graph.neighborhood(of: seeds, hops: hops)
+        }
 
         // Access filter: owner docs + publicly available docs.
         let ownerKey = TotemRegistry.Owner(id: request.ownerId)

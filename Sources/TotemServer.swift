@@ -33,15 +33,21 @@ struct TotemServer: AsyncParsableCommand {
     @ArgumentParser.Option(name: .long, help: "Port number.")
     var port: Int = AppConstants.defaultPort
 
+    @ArgumentParser.Flag(name: .long, help: "Disable LLM graph extraction (keyword entities only).")
+    var noGraphExtraction: Bool = false
+
+    @ArgumentParser.Option(name: .long, help: "Graph extraction backend: mlx (on-device, default) | mistral (API) | keyword.")
+    var graphBackend: String = "mlx"
+
+    @ArgumentParser.Option(name: .long, help: "Mistral model for API graph extraction.")
+    var graphMistralModel: String = "mistral-tiny"
+
     #if canImport(MLX)
     @ArgumentParser.Flag(name: .long, help: "Use on-device MLX embedding model instead of Mistral API.")
     var useMLX: Bool = false
 
     @ArgumentParser.Option(name: .long, help: "MLX Hub model ID for on-device embeddings.")
     var mlxModel: String = "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
-
-    @ArgumentParser.Flag(name: .long, help: "Disable on-device LLM graph extraction (keyword entities only).")
-    var noGraphExtraction: Bool = false
 
     @ArgumentParser.Option(name: .long, help: "MLX Hub model ID for on-device graph extraction.")
     var graphModel: String = "mlx-community/Qwen3-1.7B-4bit"
@@ -67,8 +73,9 @@ struct TotemServer: AsyncParsableCommand {
 
     enum CodingKeys: CodingKey {
         case host, port, grpcPort, mothershipHost, mothershipGrpcPort, fleetHost, fleetGrpcPort, nodeId
+        case noGraphExtraction, graphBackend, graphMistralModel
         #if canImport(MLX)
-        case useMLX, mlxModel, noGraphExtraction, graphModel
+        case useMLX, mlxModel, graphModel
         #endif
     }
 
@@ -226,21 +233,43 @@ struct TotemServer: AsyncParsableCommand {
         return EmbeddingModelProvider(logger: logger)
     }
 
-    /// On-device LLM extraction when MLX is available and enabled; keyword fallback otherwise.
-    /// Extraction failures never fail ingest — GraphEnrichment keeps the keyword entities.
+    /// LLM extraction backend selection: on-device MLX (default), Mistral API,
+    /// or keyword-only. Extraction failures never fail ingest — GraphEnrichment
+    /// keeps the keyword entities.
     private func makeGraphExtractor() -> any GraphExtracting {
         var logger = Logger(label: "totem")
         logger.logLevel = .debug
-        #if canImport(MLX)
-        if !noGraphExtraction {
+
+        guard !noGraphExtraction else {
+            logger.info("Graph extraction: disabled — keyword entities only")
+            return KeywordGraphExtractionProvider()
+        }
+
+        switch graphBackend {
+        case "mistral":
+            let key = ProcessInfo.processInfo.environment["MISTRAL_API_KEY"] ?? ""
+            guard !key.isEmpty else {
+                logger.warning("Graph extraction: Mistral backend requested but MISTRAL_API_KEY is not set — falling back to keyword extraction.")
+                return KeywordGraphExtractionProvider()
+            }
+            logger.info("Graph extraction: Mistral API (\(graphMistralModel))")
+            return MistralGraphExtractionProvider(model: graphMistralModel, logger: logger)
+
+        case "mlx":
+            #if canImport(MLX)
             if MLXRuntimeProbe.metalKernelLibraryAvailable() {
                 logger.info("Graph extraction: MLX (\(graphModel))")
                 return MLXGraphExtractionProvider(modelId: graphModel)
             }
-            logger.warning("Graph extraction: MLX requested but this build has no Metal kernel library (default.metallib) — MLX would abort the process on first use. Falling back to keyword extraction; rebuild Frigate with its metallib step to enable on-device extraction.")
+            logger.warning("Graph extraction: MLX requested but this build has no Metal kernel library (default.metallib) — MLX would abort the process on first use. Falling back to keyword extraction; use --graph-backend mistral for API extraction, or rebuild Frigate with its metallib step.")
+            #else
+            logger.warning("Graph extraction: MLX backend requested but this build has no MLX support — falling back to keyword extraction (use --graph-backend mistral for API extraction).")
+            #endif
+            return KeywordGraphExtractionProvider()
+
+        default:
+            logger.info("Graph extraction: keyword backend")
+            return KeywordGraphExtractionProvider()
         }
-        #endif
-        logger.info("Graph extraction: keyword fallback")
-        return KeywordGraphExtractionProvider()
     }
 }

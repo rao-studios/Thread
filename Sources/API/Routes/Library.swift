@@ -43,4 +43,27 @@ func registerLibraryRoute(_ app: some RouterMethods<TotemRequestContext>, _ data
         let groups = groupIds.compactMap { database.buildGroup(groupId: $0, registry: registry) }
         return LibraryResponse(groups: groups)
     }
+
+    // Destructive: wipes this node's partition table, graph, and registry.
+    // Requires an explicit confirmation flag so no client can trip it by accident.
+    app.post("/v1/clear") { request, context async throws -> ClearResponse in
+        let body = try await request.decode(as: ClearRequest.self, context: context)
+        guard body.confirm == true else {
+            throw HTTPError(.badRequest, message: #"Pass {"confirm": true} to clear this node's database."#)
+        }
+        let removed = await database.clearAll()
+        return ClearResponse(cleared: true,
+                             documents: removed.documents,
+                             entities: removed.entities)
+    }
+}
+
+private struct ClearRequest: Codable {
+    let confirm: Bool?
+}
+
+struct ClearResponse: ResponseCodable {
+    let cleared: Bool
+    let documents: Int
+    let entities: Int
 }
