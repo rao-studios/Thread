@@ -110,6 +110,49 @@ import MLX
 import MLXLMCommon
 import MLXLLM
 
+/// Probes whether MLX can actually run on this build before any MLX op executes.
+///
+/// Frigate's Cmlx compiles the Metal backend on Apple platforms but ships no
+/// compiled kernel library (the CUDA-focused fork removed upstream mlx-swift's
+/// metallib build step). When `default.metallib` is missing, the first GPU op
+/// aborts the whole process from C++ ("Failed to load the default metallib") —
+/// not a catchable Swift error — so availability must be checked up front and
+/// MLX-backed providers skipped entirely when the library isn't bundled.
+enum MLXRuntimeProbe {
+    static func metalKernelLibraryAvailable() -> Bool {
+        #if os(macOS) || os(iOS) || os(tvOS) || os(visionOS)
+        let fm = FileManager.default
+        var roots: [URL] = []
+        if let executableDir = Bundle.main.executableURL?.deletingLastPathComponent() {
+            roots.append(executableDir)
+        }
+        roots.append(Bundle.main.bundleURL)
+        if let resources = Bundle.main.resourceURL { roots.append(resources) }
+
+        // mlx looks for METAL_PATH ("default.metallib") inside the SWIFTPM_BUNDLE
+        // ("mlx-swift_Cmlx") colocated with the executable, or beside it.
+        let relativeCandidates = [
+            "mlx-swift_Cmlx.bundle/default.metallib",
+            "mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib",
+            "Frigate_Cmlx.bundle/default.metallib",
+            "Frigate_Cmlx.bundle/Contents/Resources/default.metallib",
+            "default.metallib",
+            "mlx.metallib",
+        ]
+        for root in roots {
+            for candidate in relativeCandidates
+            where fm.fileExists(atPath: root.appendingPathComponent(candidate).path) {
+                return true
+            }
+        }
+        return false
+        #else
+        // Linux builds route MLX through the CPU/CUDA backends — no metallib.
+        return true
+        #endif
+    }
+}
+
 /// On-device LLM extractor. Lazily loads a small instruct model via the Hub and runs a fresh
 /// deterministic chat session per document. Any parse failure throws so the caller can fall
 /// back to keywords — extraction never fails ingest.

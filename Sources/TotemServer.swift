@@ -215,8 +215,11 @@ struct TotemServer: AsyncParsableCommand {
         logger.logLevel = .debug
         #if canImport(MLX)
         if useMLX {
-            logger.info("Embedding backend: MLX (\(mlxModel))")
-            return MLXEmbeddingModelProvider(modelId: mlxModel)
+            if MLXRuntimeProbe.metalKernelLibraryAvailable() {
+                logger.info("Embedding backend: MLX (\(mlxModel))")
+                return MLXEmbeddingModelProvider(modelId: mlxModel)
+            }
+            logger.warning("Embedding backend: MLX requested but this build has no Metal kernel library (default.metallib) — MLX would abort the process. Falling back to Mistral API.")
         }
         #endif
         logger.info("Embedding backend: Mistral API (mistral-embed)")
@@ -230,8 +233,11 @@ struct TotemServer: AsyncParsableCommand {
         logger.logLevel = .debug
         #if canImport(MLX)
         if !noGraphExtraction {
-            logger.info("Graph extraction: MLX (\(graphModel))")
-            return MLXGraphExtractionProvider(modelId: graphModel)
+            if MLXRuntimeProbe.metalKernelLibraryAvailable() {
+                logger.info("Graph extraction: MLX (\(graphModel))")
+                return MLXGraphExtractionProvider(modelId: graphModel)
+            }
+            logger.warning("Graph extraction: MLX requested but this build has no Metal kernel library (default.metallib) — MLX would abort the process on first use. Falling back to keyword extraction; rebuild Frigate with its metallib step to enable on-device extraction.")
         }
         #endif
         logger.info("Graph extraction: keyword fallback")
