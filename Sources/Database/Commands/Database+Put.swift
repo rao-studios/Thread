@@ -6,12 +6,39 @@ extension Database {
         let id: String
         let data: [EmbeddingData]
         let texts: [String]
-        let tags: [String]
-        let tagsEmbedding: [Float]?
+        /// Explicit + provisional entity/relationship payload for this document.
+        var graph: Database.GraphPayload
+        /// Document-level embedding of the entity names (nil until entities exist).
+        var entityEmbedding: [Float]?
+        /// True when the graph payload is only a keyword placeholder and should be replaced
+        /// by LLM extraction in the detached enrichment pass.
+        var needsExtraction: Bool
         let mediaType: MediaType
         let update: DatabaseUpdate?
         let name: String?
         let metadata: Data?
+
+        init(id: String,
+             data: [EmbeddingData],
+             texts: [String],
+             graph: Database.GraphPayload = .init(),
+             entityEmbedding: [Float]? = nil,
+             needsExtraction: Bool = false,
+             mediaType: MediaType = .text,
+             update: DatabaseUpdate? = nil,
+             name: String? = nil,
+             metadata: Data? = nil) {
+            self.id = id
+            self.data = data
+            self.texts = texts
+            self.graph = graph
+            self.entityEmbedding = entityEmbedding
+            self.needsExtraction = needsExtraction
+            self.mediaType = mediaType
+            self.update = update
+            self.name = name
+            self.metadata = metadata
+        }
     }
 }
 
@@ -25,8 +52,8 @@ extension Database {
     func put(id: String,
              data: [EmbeddingData],
              texts: [String],
-             tags: [String] = [],
-             tagsEmbedding: [Float]? = nil,
+             graph: Database.GraphPayload = .init(),
+             entityEmbedding: [Float]? = nil,
              mediaType: MediaType = .text,
              update: DatabaseUpdate? = nil,
              name: String? = nil,
@@ -54,8 +81,8 @@ extension Database {
 
         await register(document, group: request.group, update: update, ownerId: request.ownerId)
         logger.info("Put", "Registered document (docId: \(id), partitions: \(partitions.count))", service: .embedding, request: request, flow: .embed(documentId: id))
-        await index(id: id, partitions: partitions, tags: tags, tagsEmbedding: tagsEmbedding, metadata: metadata, request: request)
-        logger.info("Put", "Indexed document (docId: \(id)) → partition table + HNSW", service: .embedding, request: request, flow: .embed(documentId: id))
+        await index(id: id, partitions: partitions, graph: graph, entityEmbedding: entityEmbedding, metadata: metadata, request: request)
+        logger.info("Put", "Indexed document (docId: \(id)) → partition table + graph", service: .embedding, request: request, flow: .embed(documentId: id))
 
         return document
     }
@@ -148,8 +175,8 @@ extension Database {
         }
 
         let indexItems = prepared
-        let batchItems: [(id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest)] = zip(indexItems, items).map { prepared, item in
-            (prepared.document.id, prepared.partitions, item.tags, item.tagsEmbedding, item.metadata, request)
+        let batchItems: [(id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, entityEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest)] = zip(indexItems, items).map { prepared, item in
+            (prepared.document.id, prepared.partitions, item.graph, item.entityEmbedding, item.metadata, request)
         }
         // Parts files were pre-written above — skip the per-document synchronous
         // plist writes on the TableMutator actor.
@@ -158,7 +185,7 @@ extension Database {
         for item in prepared {
             logger.info(
                 "Put Batch",
-                "Indexed document (docId: \(item.document.id), partitions: \(item.partitions.count)) → partition table + HNSW",
+                "Indexed document (docId: \(item.document.id), partitions: \(item.partitions.count)) → partition table + graph",
                 service: .embedding,
                 request: request,
                 flow: .embed(documentId: item.document.id)

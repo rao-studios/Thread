@@ -37,7 +37,7 @@ final class PerfBaselineTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    private static let dim = HNSWVectorStore.vectorDim  // 1024
+    private static let dim = VectorFixtures.embeddingDim  // 1024
 
     private func vectors(_ count: Int, seedBase: UInt64) -> [[Float]] {
         (0..<count).map { VectorFixtures.random(dim: Self.dim, seed: seedBase &+ UInt64($0)) }
@@ -117,15 +117,15 @@ final class PerfBaselineTests: XCTestCase {
 
     // MARK: - End-to-end TableMutator.putBatch
 
-    /// 20 docs × 10 partitions per measured iteration: HNSW inserts + PQ train
-    /// + WAL/persistence scheduling. Fresh mutator + vector store per iteration
-    /// so insert cost isn't skewed by graph growth across iterations.
+    /// 20 docs × 10 partitions per measured iteration: PQ train + graph upsert
+    /// + persistence scheduling. Fresh mutator per iteration so cost isn't
+    /// skewed by growth across iterations. (Re-baseline: linear ADC engine.)
     func testPerf_PutBatch_20Docs_10Partitions() throws {
         let docCount = 20
         let partitionsPerDoc = 10
         let allEmbeddings = vectors(docCount * partitionsPerDoc, seedBase: 1_000)
 
-        let items = (0..<docCount).map { d -> (id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
+        let items = (0..<docCount).map { d -> (id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, entityEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
             let parts = (0..<partitionsPerDoc).map { p in
                 Database.Partition.test(
                     id: "perf-p\(d)-\(p)",
@@ -133,22 +133,15 @@ final class PerfBaselineTests: XCTestCase {
                     embedding: allEmbeddings[d * partitionsPerDoc + p]
                 )
             }
-            return ("perf-doc\(d)", parts, [], nil, nil, .test())
+            return ("perf-doc\(d)", parts, .init(), nil, nil, .test())
         }
 
-        let dir = tempDir!
         measure {
             let exp = expectation(description: "putBatch")
             Task {
-                let store = try HNSWVectorStore(
-                    url: dir.appendingPathComponent("vec-\(UUID().uuidString)"),
-                    nodeCount: 0
-                )
-                var table = PartitionTable()
-                table.shards[0].vectorStore = store
                 let mutator = TableMutator.test()
-                mutator.seed(table)
-                mutator.seedVectorStore(store)
+                mutator.seed(PartitionTable())
+                mutator.seedGraph(GraphStore())
 
                 await mutator.putBatch(items: items)
                 exp.fulfill()

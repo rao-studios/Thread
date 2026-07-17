@@ -4,7 +4,7 @@ extension Database {
     struct SearchResult {
         var data: [PartitionSearchResult]
         var adjustments: [SinatraAdjustment]
-        var shardStats: [SearchShardStat]
+        var trace: GraphSearchTrace?
 
         var partitionWithScores: [(score: Float, partition: Database.Partition)] {
             data.flatMap { zip($0.scores, $0.partitions) }
@@ -26,20 +26,20 @@ extension Database {
         var adjustments: [SinatraAdjustment]
         var references: [Database.DocumentReference]
         var partitions: [Database.Partition]
-        var shardStats: [SearchShardStat]
+        var trace: GraphSearchTrace?
 
         init(
             context: [String],
             adjustments: [SinatraAdjustment],
             references: [Database.DocumentReference],
             partitions: [Database.Partition] = [],
-            shardStats: [SearchShardStat] = []
+            trace: GraphSearchTrace? = nil
         ) {
             self.context = context
             self.adjustments = adjustments
             self.references = references
             self.partitions = partitions
-            self.shardStats = shardStats
+            self.trace = trace
         }
     }
 }

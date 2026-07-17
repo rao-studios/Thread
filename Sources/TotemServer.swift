@@ -12,13 +12,15 @@ import Darwin
 func configureRoutes(
     _ router: Router<TotemRequestContext>,
     _ database: Database,
-    embeddingModelProvider: any EmbeddingProviding
+    embeddingModelProvider: any EmbeddingProviding,
+    graphExtractor: any GraphExtracting
 ) {
     registerHealthRoute(router)
     registerSearchRoute(router, database, embeddingModelProvider: embeddingModelProvider)
-    registerBatchEmbeddingsRoute(router, database, embeddingModelProvider: embeddingModelProvider)
+    registerBatchEmbeddingsRoute(router, database, embeddingModelProvider: embeddingModelProvider,
+                                 graphExtractor: graphExtractor)
     registerLibraryRoute(router, database)
-    registerHNSWRoutes(router, database)
+    registerGraphRoute(router, database, embeddingModelProvider: embeddingModelProvider)
 }
 
 @main
@@ -35,6 +37,12 @@ struct TotemServer: AsyncParsableCommand {
 
     @ArgumentParser.Option(name: .long, help: "MLX Hub model ID for on-device embeddings.")
     var mlxModel: String = "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
+
+    @ArgumentParser.Flag(name: .long, help: "Disable on-device LLM graph extraction (keyword entities only).")
+    var noGraphExtraction: Bool = false
+
+    @ArgumentParser.Option(name: .long, help: "MLX Hub model ID for on-device graph extraction.")
+    var graphModel: String = "mlx-community/Qwen3-1.7B-4bit"
     #endif
 
     @ArgumentParser.Option(name: .long, help: "gRPC server port for Database fan-out calls.")
@@ -58,7 +66,7 @@ struct TotemServer: AsyncParsableCommand {
     enum CodingKeys: CodingKey {
         case host, port, grpcPort, mothershipHost, mothershipGrpcPort, fleetHost, fleetGrpcPort, nodeId
         #if canImport(MLX)
-        case useMLX, mlxModel
+        case useMLX, mlxModel, noGraphExtraction, graphModel
         #endif
     }
 
@@ -80,6 +88,7 @@ struct TotemServer: AsyncParsableCommand {
         let fixedNodeId = nodeId.flatMap { UUID(uuidString: $0) }
         let database = Database(nodeId: fixedNodeId)
         let embeddingModelProvider: any EmbeddingProviding = makeEmbeddingProvider()
+        let graphExtractor: any GraphExtracting = makeGraphExtractor()
 
         // ── Router + middleware ───────────────────────────────────────────────────
         let router = Router(context: TotemRequestContext.self)
@@ -90,14 +99,16 @@ struct TotemServer: AsyncParsableCommand {
         ))
 
         // ── Register ALL routes before Application.init freezes the responder ────
-        configureRoutes(router, database, embeddingModelProvider: embeddingModelProvider)
+        configureRoutes(router, database, embeddingModelProvider: embeddingModelProvider,
+                        graphExtractor: graphExtractor)
 
         // ── GRPC Server ────────────────────
         let grpcServer = TotemGRPCServer()
-        await grpcServer.start(database: database, embeddingProvider: embeddingModelProvider, grpcPort: grpcPort)
+        await grpcServer.start(database: database, embeddingProvider: embeddingModelProvider,
+                               graphExtractor: graphExtractor, grpcPort: grpcPort)
 
         // A Totem can dial a Seer mothership and/or a Fleet destination. Both reuse
-        // the same destination-agnostic dispatcher (it serves search/library/HNSW).
+        // the same destination-agnostic dispatcher (it serves search/library/graph).
         // Strong owners that must outlive `app.runService()`. The registration
         // clients spawn their heartbeat/session loops with `[weak self]`, so
         // without an owner here the actor is deallocated the moment its first
@@ -111,6 +122,7 @@ struct TotemServer: AsyncParsableCommand {
             let dispatcher = MothershipRequestDispatcher(
                 database: database,
                 embeddingProvider: embeddingModelProvider,
+                graphExtractor: graphExtractor,
                 logger: logger
             )
 
@@ -209,4 +221,18 @@ struct TotemServer: AsyncParsableCommand {
         return EmbeddingModelProvider(logger: logger)
     }
 
+    /// On-device LLM extraction when MLX is available and enabled; keyword fallback otherwise.
+    /// Extraction failures never fail ingest — GraphEnrichment keeps the keyword entities.
+    private func makeGraphExtractor() -> any GraphExtracting {
+        var logger = Logger(label: "totem")
+        logger.logLevel = .debug
+        #if canImport(MLX)
+        if !noGraphExtraction {
+            logger.info("Graph extraction: MLX (\(graphModel))")
+            return MLXGraphExtractionProvider(modelId: graphModel)
+        }
+        #endif
+        logger.info("Graph extraction: keyword fallback")
+        return KeywordGraphExtractionProvider()
+    }
 }

@@ -17,7 +17,9 @@ func wipeTotemPersistenceFiles() {
     if let contents = try? FileManager.default.contentsOfDirectory(
         at: db, includingPropertiesForKeys: nil, options: .skipsHiddenFiles
     ) {
-        for url in contents where url.lastPathComponent.hasPrefix("shard-") {
+        for url in contents where url.lastPathComponent.hasPrefix("shard-")
+            || url.lastPathComponent.hasPrefix("table-")
+            || url.lastPathComponent.hasPrefix("graph-") {
             try? FileManager.default.removeItem(at: url)
         }
     }
@@ -83,7 +85,7 @@ extension TableMutator {
 
 extension RegistryMutator {
     static func test() -> RegistryMutator {
-        let m = RegistryMutator(logger: .test, walURL: nil)
+        let m = RegistryMutator(logger: .test)
         m.seed(TotemRegistry())
         return m
     }
@@ -140,7 +142,7 @@ actor MockEmbeddingProvider: EmbeddingProviding {
         let embeddings = texts.enumerated().map { (i, _) -> EmbeddingData in
             let seed = UInt64(i + callCount * 1000 + 99000)
             return EmbeddingData(
-                embedding: .floats(VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: seed)),
+                embedding: .floats(VectorFixtures.random(dim: VectorFixtures.embeddingDim, seed: seed)),
                 index: i
             )
         }
@@ -163,6 +165,8 @@ actor MockEmbeddingProvider: EmbeddingProviding {
 /// All vectors use `dim = 32` — divisible by 16 (PartitionQuantizer.numSubvectors).
 enum VectorFixtures {
     static let dim = 32
+    /// Full production embedding dimension (mistral-embed).
+    static let embeddingDim = 1024
 
     /// All-zero vector.
     static func zeros() -> [Float] { [Float](repeating: 0, count: dim) }

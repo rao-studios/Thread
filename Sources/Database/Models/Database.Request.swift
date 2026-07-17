@@ -4,6 +4,9 @@ struct DatabaseRequest: Codable {
     let ownerId: String
     let group: Database.Group?
     let groups: [Database.Group]?
+    /// Query entity terms for graph matching. `tags` is kept as a legacy alias;
+    /// consumers should read `entities ?? tags`.
+    let entities: [String]?
     let tags: [String]?
     let aggregate: Bool?
     let scope: DatabaseRequestScope?
@@ -12,6 +15,7 @@ struct DatabaseRequest: Codable {
     init(ownerId: String,
          group: Database.Group? = nil,
          groups: [Database.Group]? = nil,
+         entities: [String]? = nil,
          tags: [String]? = nil,
          aggregate: Bool? = nil,
          scope: DatabaseRequestScope? = nil,
@@ -19,6 +23,7 @@ struct DatabaseRequest: Codable {
         self.ownerId = ownerId
         self.group = group
         self.groups = groups
+        self.entities = entities
         self.tags = tags
         self.aggregate = aggregate
         self.scope = scope
@@ -29,6 +34,7 @@ struct DatabaseRequest: Codable {
         case ownerId = "owner_id"
         case group
         case groups
+        case entities
         case tags
         case aggregate
         case scope
@@ -40,6 +46,7 @@ struct DatabaseRequest: Codable {
         ownerId   = try c.decode(String.self,                    forKey: .ownerId)
         group     = try c.decodeIfPresent(Database.Group.self,       forKey: .group)
         groups    = try c.decodeIfPresent([Database.Group].self,     forKey: .groups)
+        entities  = try c.decodeIfPresent([String].self,         forKey: .entities)
         tags      = try c.decodeIfPresent([String].self,         forKey: .tags)
         aggregate = try c.decodeIfPresent(Bool.self,             forKey: .aggregate)
         scope     = try c.decodeIfPresent(DatabaseRequestScope.self, forKey: .scope)
@@ -53,6 +60,7 @@ struct DatabaseRequest: Codable {
             ownerId: self.ownerId.lowercased(),
             group: self.group,
             groups: self.groups,
+            entities: self.entities,
             tags: self.tags,
             aggregate: self.aggregate,
             scope: self.scope,

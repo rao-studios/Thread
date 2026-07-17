@@ -166,22 +166,22 @@ final class Flow3_PartitionIndexTests: XCTestCase {
             Database.Partition.test(id: "p\(i)", documentId: "doc", embedding: VectorFixtures.random(seed: UInt64(i)))
         }
         let tagsEmbedding = VectorFixtures.random(seed: 777)
-        index.train(partitions, tags: ["swift", "server"], tagsEmbedding: tagsEmbedding, documentId: "doc", logger: .test)
+        index.train(partitions, entityIds: ["swift", "server"], entityEmbedding: tagsEmbedding, documentId: "doc", logger: .test)
 
-        XCTAssertNotNil(index.tagsEmbedding, "tagsEmbedding must be set after train with tags")
-        XCTAssertEqual(index.tagsEmbedding?.count, tagsEmbedding.count)
+        XCTAssertNotNil(index.entityEmbedding, "tagsEmbedding must be set after train with tags")
+        XCTAssertEqual(index.entityEmbedding?.count, tagsEmbedding.count)
     }
 
     func testTagsEmbeddingNilWhenNoTagsProvided() {
         var index = PartitionIndex()
         let partitions = [Database.Partition.test(id: "p0", documentId: "doc", embedding: VectorFixtures.random(seed: 1))]
         index.train(partitions, documentId: "doc", logger: .test)
-        XCTAssertNil(index.tagsEmbedding, "tagsEmbedding must be nil when no tags are supplied")
+        XCTAssertNil(index.entityEmbedding, "tagsEmbedding must be nil when no tags are supplied")
     }
 
     func testTagDistanceReturnsNilWithoutTagsEmbedding() {
         let (index, _) = makeTrainedIndex()
-        let result = index.tagDistance(queryEmbedding: VectorFixtures.random(seed: 10))
+        let result = index.entityDistance(queryEmbedding: VectorFixtures.random(seed: 10))
         XCTAssertNil(result, "tagDistance() must return nil when tagsEmbedding is nil")
     }
 
@@ -191,9 +191,9 @@ final class Flow3_PartitionIndexTests: XCTestCase {
         // dot(v, v) = 1 → tagDistance = 0
         let vec = VectorFixtures.unit(axis: 0)
         let partitions = [Database.Partition.test(id: "p0", documentId: "doc", embedding: vec)]
-        index.train(partitions, tags: ["test"], tagsEmbedding: vec, documentId: "doc", logger: .test)
+        index.train(partitions, entityIds: ["test"], entityEmbedding: vec, documentId: "doc", logger: .test)
 
-        let dist = index.tagDistance(queryEmbedding: vec)
+        let dist = index.entityDistance(queryEmbedding: vec)
         XCTAssertNotNil(dist)
         XCTAssertEqual(Double(dist!), 0.0, accuracy: 0.01,
             "identical unit vectors must produce tag distance ≈ 0")
@@ -204,9 +204,9 @@ final class Flow3_PartitionIndexTests: XCTestCase {
         let tagsVec  = VectorFixtures.unit(axis: 0)   // [1, 0, 0, …]
         let queryVec = VectorFixtures.unit(axis: 1)   // [0, 1, 0, …]
         let partitions = [Database.Partition.test(id: "p0", documentId: "doc", embedding: tagsVec)]
-        index.train(partitions, tags: ["a"], tagsEmbedding: tagsVec, documentId: "doc", logger: .test)
+        index.train(partitions, entityIds: ["a"], entityEmbedding: tagsVec, documentId: "doc", logger: .test)
 
-        let dist = index.tagDistance(queryEmbedding: queryVec)
+        let dist = index.entityDistance(queryEmbedding: queryVec)
         XCTAssertNotNil(dist)
         // dot(orthogonal unit vectors) = 0 → tagDistance = 1.0
         XCTAssertEqual(Double(dist!), 1.0, accuracy: 0.01,
@@ -214,8 +214,8 @@ final class Flow3_PartitionIndexTests: XCTestCase {
     }
 
     func testTagSimilarityThresholdConstantIsReasonable() {
-        XCTAssertGreaterThan(PartitionIndex.tagSimilarityThreshold, 0.0)
-        XCTAssertLessThan(PartitionIndex.tagSimilarityThreshold, 1.0)
+        XCTAssertGreaterThan(PartitionIndex.entitySimilarityThreshold, 0.0)
+        XCTAssertLessThan(PartitionIndex.entitySimilarityThreshold, 1.0)
     }
 
     // MARK: - Metadata

@@ -5,7 +5,7 @@
 //  Tests for MothershipRequestDispatcher.handle(_:) — the session-stream router
 //  that maps incoming TotemSessionMessage payloads to the correct service impl.
 //
-//  No network or running gRPC server is needed: the dispatcher wraps the three
+//  No network or running gRPC server is needed: the dispatcher wraps the
 //  service impls directly and the ServerContext is constructed with dummy values.
 //
 
@@ -39,6 +39,7 @@ final class Flow22_GRPCDispatcherTests: XCTestCase {
         MothershipRequestDispatcher(
             database: database,
             embeddingProvider: MockEmbeddingProvider(),
+            graphExtractor: KeywordGraphExtractionProvider(),
             logger: .test
         )
     }
@@ -53,13 +54,25 @@ final class Flow22_GRPCDispatcherTests: XCTestCase {
         return msg
     }
 
+    /// Index responses return before the detached enrichment task enqueues the put.
+    /// Poll until the document is visible in the table (or fail after `timeout`).
+    private func waitForIndexed(_ documentId: String, in db: Database,
+                                timeout: TimeInterval = 10) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if db.table?.keys.contains(documentId) == true { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTFail("Document \(documentId) was not indexed within \(timeout)s")
+    }
+
     // MARK: - Routing & correlation
 
     func testUnhandledPayloadReturnsNil() async {
         let db = await makeDatabase()
         let dispatcher = makeDispatcher(database: db)
 
-        var ping = Totem_V1_TotemSessionPing()
+        let ping = Totem_V1_TotemSessionPing()
         let msg = makeMsg(.ping(ping))
         let response = await dispatcher.handle(msg)
         XCTAssertNil(response)
@@ -69,9 +82,10 @@ final class Flow22_GRPCDispatcherTests: XCTestCase {
         let db = await makeDatabase()
         let dispatcher = makeDispatcher(database: db)
 
-        var req = Totem_V1_TotemHNSWStatsRequest()
+        var req = Totem_V1_TotemGraphQueryRequest()
         req.ownerID = "owner-corr"
-        let response = await dispatcher.handle(makeMsg(.hnswStatsRequest(req), correlationId: "abc-123"))
+        req.entity = "anything"
+        let response = await dispatcher.handle(makeMsg(.graphRequest(req), correlationId: "abc-123"))
         XCTAssertEqual(response?.correlationID, "abc-123")
     }
 
@@ -141,6 +155,9 @@ final class Flow22_GRPCDispatcherTests: XCTestCase {
         } else {
             XCTFail("Expected .indexResponse, got \(String(describing: response?.payload))")
         }
+        // Let the detached enrichment finish so teardown doesn't race the put.
+        await waitForIndexed("doc-a", in: db)
+        await waitForIndexed("doc-b", in: db)
     }
 
     func testIndexRequestWithEmptyItemsSucceeds() async {
@@ -199,94 +216,69 @@ final class Flow22_GRPCDispatcherTests: XCTestCase {
         }
     }
 
-    // MARK: - HNSW Stats
+    // MARK: - Graph
 
-    func testHNSWStatsRequestRoutesToStatsResponse() async {
+    func testGraphRequestOnEmptyGraphReturnsEmptyResponse() async {
         let db = await makeDatabase()
         let dispatcher = makeDispatcher(database: db)
 
-        var req = Totem_V1_TotemHNSWStatsRequest()
+        var req = Totem_V1_TotemGraphQueryRequest()
         req.ownerID = "alice"
+        req.entity = "anything"
+        req.hops = 1
 
-        let response = await dispatcher.handle(makeMsg(.hnswStatsRequest(req)))
+        let response = await dispatcher.handle(makeMsg(.graphRequest(req)))
         XCTAssertNotNil(response)
-        if case .hnswStatsResponse(let r) = response?.payload {
-            XCTAssertEqual(r.personal.liveNodes, 0)
-            XCTAssertEqual(r.global.liveNodes, 0)
+        if case .graphResponse(let r) = response?.payload {
+            XCTAssertTrue(r.entities.isEmpty)
+            XCTAssertTrue(r.relationships.isEmpty)
         } else {
-            XCTFail("Expected .hnswStatsResponse, got \(String(describing: response?.payload))")
+            XCTFail("Expected .graphResponse, got \(String(describing: response?.payload))")
         }
     }
 
-    // MARK: - HNSW Graph
-
-    func testHNSWGraphRequestRoutesToGraphResponse() async {
+    func testGraphRequestResolvesIndexedEntities() async {
         let db = await makeDatabase()
         let dispatcher = makeDispatcher(database: db)
 
-        var req = Totem_V1_TotemHNSWGraphRequest()
-        req.ownerID = "alice"
-        req.scope = "personal"
-        req.shardIndex = -1
+        // Index a document with an explicit entity + relationship payload.
+        var item = Totem_V1_TotemIndexItem()
+        item.documentID = "graph-doc"
+        item.texts = ["Ada Lovelace worked with Charles Babbage on the analytical engine."]
+        var ada = Totem_V1_TotemGraphEntityIn()
+        ada.name = "Ada Lovelace"; ada.kind = "person"
+        var babbage = Totem_V1_TotemGraphEntityIn()
+        babbage.name = "Charles Babbage"; babbage.kind = "person"
+        item.entities = [ada, babbage]
+        var rel = Totem_V1_TotemGraphRelationIn()
+        rel.subject = "Ada Lovelace"; rel.predicate = "worked with"; rel.object = "Charles Babbage"
+        item.relationships = [rel]
 
-        let response = await dispatcher.handle(makeMsg(.hnswGraphRequest(req)))
-        XCTAssertNotNil(response)
-        if case .hnswGraphResponse(let r) = response?.payload {
-            XCTAssertTrue(r.nodes.isEmpty)
+        var indexReq = Totem_V1_TotemIndexRequest()
+        indexReq.ownerID = "graph-owner"
+        indexReq.scope = "personal"
+        indexReq.items = [item]
+
+        _ = await dispatcher.handle(makeMsg(.indexRequest(indexReq)))
+        await waitForIndexed("graph-doc", in: db)
+
+        var req = Totem_V1_TotemGraphQueryRequest()
+        req.ownerID = "graph-owner"
+        req.entity = "Ada Lovelace"
+        req.hops = 1
+        req.includeDocuments = true
+
+        let response = await dispatcher.handle(makeMsg(.graphRequest(req)))
+        if case .graphResponse(let r) = response?.payload {
+            XCTAssertTrue(r.entities.contains { $0.name == "Ada Lovelace" },
+                "Graph query must resolve the indexed entity by name")
+            XCTAssertTrue(r.entities.contains { $0.name == "Charles Babbage" },
+                "One-hop traversal must reach the related entity")
+            XCTAssertTrue(r.relationships.contains { $0.predicate == "worked with" },
+                "The traversed relationship must be returned")
+            XCTAssertEqual(r.stats.entityCount, 2)
         } else {
-            XCTFail("Expected .hnswGraphResponse, got \(String(describing: response?.payload))")
-        }
-    }
-
-    // MARK: - HNSW NodeBatch
-
-    func testHNSWNodeBatchRequestRoutesToNodeBatchResponse() async {
-        let db = await makeDatabase()
-        let dispatcher = makeDispatcher(database: db)
-
-        var req = Totem_V1_TotemHNSWNodeBatchRequest()
-        req.partitionIds = ["unknown-partition-1", "unknown-partition-2"]
-
-        let response = await dispatcher.handle(makeMsg(.hnswNodeBatchRequest(req)))
-        XCTAssertNotNil(response)
-        if case .hnswNodeBatchResponse(let r) = response?.payload {
-            XCTAssertTrue(r.nodes.isEmpty)
-        } else {
-            XCTFail("Expected .hnswNodeBatchResponse, got \(String(describing: response?.payload))")
-        }
-    }
-
-    // MARK: - HNSW Node (not found)
-
-    func testHNSWNodeRequestForUnknownPartitionReturnsNil() async {
-        let db = await makeDatabase()
-        let dispatcher = makeDispatcher(database: db)
-
-        var req = Totem_V1_TotemHNSWNodeRequest()
-        req.partitionID = "does-not-exist"
-
-        // Service throws .notFound; dispatcher catches and returns nil
-        let response = await dispatcher.handle(makeMsg(.hnswNodeRequest(req)))
-        XCTAssertNil(response)
-    }
-
-    // MARK: - HNSW DeleteNode
-
-    func testHNSWDeleteNodeRequestRoutesToDeleteNodeResponse() async {
-        let db = await makeDatabase()
-        let dispatcher = makeDispatcher(database: db)
-
-        var req = Totem_V1_TotemHNSWDeleteNodeRequest()
-        req.ownerID = "alice"
-        req.partitionID = "nonexistent-partition"
-
-        let response = await dispatcher.handle(makeMsg(.hnswDeleteNodeRequest(req)))
-        XCTAssertNotNil(response)
-        if case .hnswDeleteNodeResponse(let r) = response?.payload {
-            XCTAssertFalse(r.removed)
-            XCTAssertTrue(r.documentID.isEmpty)
-        } else {
-            XCTFail("Expected .hnswDeleteNodeResponse, got \(String(describing: response?.payload))")
+            XCTFail("Expected .graphResponse, got \(String(describing: response?.payload))")
         }
     }
 
@@ -315,9 +307,9 @@ final class Flow22_GRPCDispatcherTests: XCTestCase {
             return
         }
 
-        // Drain the async write queue: removeAll on an unknown owner awaits the
-        // CheckedContinuation and only returns after all preceding puts have committed.
-        _ = await db.removeAll(ownerId: "drain-barrier", request: .test())
+        // The index response returns before the detached enrichment enqueues the put —
+        // wait until the document is actually searchable.
+        await waitForIndexed("e2e-doc", in: db)
 
         // Search for the indexed content
         var searchReq = Totem_V1_TotemSearchRequest()

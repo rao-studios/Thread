@@ -13,37 +13,37 @@ import MLXAccelerate
 /// the chunking algorithm.
 ///
 /// **Memory layout**
-/// Only `pq` (codebooks), `slots` (lean PQ codes + IDs), `tags`, and
-/// `tagsCompressedEmbedding` are held in memory and persisted in
-/// `shard-<nodeId>-indices`. Partition metadata lives in per-document files
-/// (`documents/{id}-parts`) and is loaded on demand at content-resolution time.
+/// Only `pq` (codebooks), `slots` (lean PQ codes + IDs), `entityIds`, and
+/// `entityEmbedding` are held in memory and persisted in the table plist.
+/// Partition metadata lives in per-document files (`documents/{id}-parts`)
+/// and is loaded on demand at content-resolution time.
 struct PartitionIndex: Codable {
     var pq: PartitionQuantizer
     /// Lean records for PQ scoring — no content, no raw embedding.
     var slots: [PartitionSlot]
-    /// Document-level tags provided by the requestor at index time.
-    var tags: [String]
-    /// Exact embedding of `tags.joined(separator: " ")`, stored for precise dot-product
-    /// distance at search time. Nil when no tags were supplied.
-    var tagsEmbedding: [Float]?
+    /// Graph entity IDs this document contributes provenance to (resolved at upsert).
+    var entityIds: [EntityID]
+    /// Exact embedding of the joined entity names, stored for precise dot-product
+    /// distance at search time. Nil when the document has no entities.
+    var entityEmbedding: [Float]?
 
     var metadata: Data?
 
-    /// Cosine similarity floor for the tag pre-filter (generous — coarse pass, not a hard gate).
-    static let tagSimilarityThreshold: Float = 0.15
+    /// Cosine similarity floor for the entity pre-filter (generous — coarse pass, not a hard gate).
+    static let entitySimilarityThreshold: Float = 0.15
 
     init() {
-        pq            = .init()
-        slots         = []
-        tags          = []
-        tagsEmbedding = nil
+        pq              = .init()
+        slots           = []
+        entityIds       = []
+        entityEmbedding = nil
     }
 
     enum CodingKeys: String, CodingKey {
         case pq
         case slots
-        case tags
-        case tagsEmbedding = "tags_embedding"
+        case entityIds       = "entity_ids"
+        case entityEmbedding = "entity_embedding"
         case metadata
     }
 
@@ -54,8 +54,8 @@ struct PartitionIndex: Codable {
     /// persists it to `documents/{id}-parts` before calling this method.
     mutating func train(
         _ partitions: [Database.Partition],
-        tags: [String] = [],
-        tagsEmbedding: [Float]? = nil,
+        entityIds: [EntityID] = [],
+        entityEmbedding: [Float]? = nil,
         documentId: String,
         logger: TotemLogger
     ) {
@@ -76,23 +76,23 @@ struct PartitionIndex: Codable {
                           compressedEmbedding: $0.compressedEmbedding)
         })
 
-        self.tags = tags
-        self.tagsEmbedding = tagsEmbedding
+        self.entityIds = entityIds
+        self.entityEmbedding = entityEmbedding
 
         logger.info(
             "Index Train",
-            "✨ PQ trained — \(partitions.count) partition(s) compressed (docId: \(documentId), total: \(self.slots.count), tags: \(tags.count))",
+            "✨ PQ trained — \(partitions.count) partition(s) compressed (docId: \(documentId), total: \(self.slots.count), entities: \(entityIds.count))",
             service: .database,
             flow: .embed(documentId: documentId)
         )
     }
 
-    // MARK: - Tag Distance
+    // MARK: - Entity Distance
 
-    /// Exact dot-product distance between the query embedding and this document's tags embedding.
-    /// Returns nil when no tags were indexed for this document (caller should include the document).
-    func tagDistance(queryEmbedding: [Float]) -> Float? {
-        guard let stored = tagsEmbedding,
+    /// Exact dot-product distance between the query embedding and this document's entity embedding.
+    /// Returns nil when no entities were indexed for this document (caller should include the document).
+    func entityDistance(queryEmbedding: [Float]) -> Float? {
+        guard let stored = entityEmbedding,
               stored.count == queryEmbedding.count else { return nil }
         var dot: Float = 0
         vDSP_dotpr(stored, 1, queryEmbedding, 1, &dot, vDSP_Length(stored.count))

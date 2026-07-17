@@ -2,16 +2,11 @@
 //  Flow8_IndexQueueTests.swift
 //  database-serverTests
 //
-//  Tests for the serialised index-write queue and the related TableMutator
-//  changes introduced to eliminate 20-minute outages caused by concurrent
-//  batch-embedding + purge jobs:
+//  Tests for the serialised index-write queue and TableMutator basics:
 //
 //    TableMutator
-//      • compactThreshold raised to 0.35 (regression guard)
-//      • remove() / removeAll() no longer trigger auto-compact
 //      • replace() atomically supersedes any pending debounced flush
-//      • syncEf() updates the in-memory snapshot without marking the table dirty
-//      • compact() only saves to disk when nodes are actually removed
+//      • remove() detaches the document from table + graph
 //
 //    IndexQueue — FIFO serialisation (integration, uses real Database)
 //      • enqueuePut items appear in snapshot once the queue drains
@@ -24,181 +19,23 @@
 import XCTest
 @testable import totem
 
-// MARK: - Helpers shared by IndexQueue integration tests
-
-// MARK: -
-
 final class Flow8_IndexQueueTests: XCTestCase {
 
-    // MARK: - Setup
-
-    private var tempDir: URL!
-
-    override func setUpWithError() throws {
-        tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("database-flow8-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-    }
-
-    override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: tempDir)
-    }
-
-    // MARK: - Helpers
-
-    /// Creates a TableMutator backed by a fresh temp vector store so HNSW
-    /// insertions actually run and node-state assertions are meaningful.
-    private func makeTableMutator() throws -> TableMutator {
-        let store = try HNSWVectorStore(
-            url: tempDir.appendingPathComponent("vec-\(UUID().uuidString)"),
-            nodeCount: 0
-        )
-        var table = PartitionTable()
-        table.shards[0].vectorStore = store
-        let mutator = TableMutator.test()
-        mutator.seed(table)
-        mutator.seedVectorStore(store)
-        return mutator
-    }
-
     // =========================================================================
-    // MARK: - Section 1: TableMutator — Recent behavioral changes
+    // MARK: - Section 1: TableMutator basics
     // =========================================================================
-
-    // MARK: compactThreshold
-
-    func testCompactThresholdIs35Percent() {
-        let threshold = TableMutator.compactThreshold
-        XCTAssertEqual(threshold, 0.35, accuracy: 0.001,
-            "compactThreshold must remain 0.35 — lowering it re-introduces " +
-            "mid-ingestion compaction that caused the 20-minute outage")
-    }
-
-    // MARK: Compaction policy — auto after put, never on remove / removeAll
-
-    func testRemoveDoesNotAutoCompact() async throws {
-        let mutator = try makeTableMutator()
-
-        let insertCount = 10
-        let items = (0..<insertCount).map { i -> (id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
-            let p = Database.Partition.test(id: "p\(i)", documentId: "doc\(i)",
-                                        embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: UInt64(i + 3000)))
-            return ("doc\(i)", [p], [], nil, nil, .test())
-        }
-        await mutator.putBatch(items: items)
-
-        await mutator.remove(id: "doc0")
-        await mutator.remove(id: "doc1")
-
-        let stats = mutator.snapshot?.shards[0].graphStats
-        XCTAssertEqual(stats?.deletedNodes, 2,
-            "Deleted nodes must still be present — auto-compact must not fire below 0.35 threshold")
-        XCTAssertGreaterThan(stats?.liveNodes ?? 0, 0,
-            "Live nodes must remain after partial removal")
-    }
-
-    func testRemoveAllDoesNotAutoCompact() async throws {
-        let mutator = try makeTableMutator()
-
-        let ownerAItems = (0..<10).map { i -> (id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
-            let p = Database.Partition.test(id: "a\(i)", documentId: "a\(i)",
-                                        embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: UInt64(i + 4000)))
-            return ("a\(i)", [p], [], nil, nil, DatabaseRequest.test(ownerId: "owner-a"))
-        }
-        let ownerBItems = (0..<4).map { i -> (id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
-            let p = Database.Partition.test(id: "b\(i)", documentId: "b\(i)",
-                                        embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: UInt64(i + 4100)))
-            return ("b\(i)", [p], [], nil, nil, DatabaseRequest.test(ownerId: "owner-b"))
-        }
-        await mutator.putBatch(items: ownerAItems)
-        await mutator.putBatch(items: ownerBItems)
-
-        let ownerAIds = (0..<10).map { "a\($0)" }
-        await mutator.removeAll(documentIds: ownerAIds, request: .test(ownerId: "owner-a"))
-
-        let stats = mutator.snapshot?.shards[0].graphStats
-        XCTAssertEqual(stats?.deletedNodes, 10,
-            "removeAll must NOT auto-compact — deleted nodes must remain until explicit compact()")
-    }
-
-    func testAutoCompactFiresAfterPutBatchCrossesThreshold() async throws {
-        let mutator = try makeTableMutator()
-
-        // Insert 10 docs, then upsert all 10 — creates 10 deleted nodes (50% > 0.35 threshold).
-        let items = (0..<10).map { i -> (id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
-            let p = Database.Partition.test(id: "ac\(i)", documentId: "acdoc\(i)",
-                                        embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: UInt64(i + 6000)))
-            return ("acdoc\(i)", [p], [], nil, nil, .test())
-        }
-        await mutator.putBatch(items: items)
-        await mutator.putBatch(items: items)
-
-        let before = mutator.snapshot?.shards[0].graphStats
-        XCTAssertEqual(before?.deletedNodes, 10,
-            "Precondition: 10 upserts must produce 10 deleted nodes before compact fires")
-
-        // scheduleCompactIfNeeded fires with a 5-second delay — wait 6 seconds.
-        try await Task.sleep(nanoseconds: 6_000_000_000)
-
-        let after = mutator.snapshot?.shards[0].graphStats
-        XCTAssertEqual(after?.deletedNodes, 0,
-            "Auto-compact must remove all deleted nodes when ratio exceeds 0.35 after putBatch")
-        XCTAssertEqual(after?.liveNodes, 10,
-            "All 10 upserted nodes must remain live after compaction")
-    }
-
-    // MARK: Explicit compact()
-
-    func testExplicitCompactRemovesDeletedNodes() async throws {
-        let mutator = try makeTableMutator()
-
-        let items = (0..<5).map { i -> (id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
-            let p = Database.Partition.test(id: "p\(i)", documentId: "doc\(i)",
-                                        embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: UInt64(i + 5000)))
-            return ("doc\(i)", [p], [], nil, nil, .test())
-        }
-        await mutator.putBatch(items: items)
-
-        for i in 0..<3 { await mutator.remove(id: "doc\(i)") }
-
-        let before = mutator.snapshot?.shards[0].graphStats
-        XCTAssertEqual(before?.deletedNodes, 3, "3 nodes should be marked deleted before compact")
-
-        let result = await mutator.compact()
-
-        XCTAssertGreaterThan(result.removedNodes, 0,
-            "compact() must remove the soft-deleted nodes")
-        let after = mutator.snapshot?.shards[0].graphStats
-        XCTAssertEqual(after?.deletedNodes, 0,
-            "No deleted nodes must remain after explicit compact()")
-        XCTAssertEqual(after?.liveNodes, 2,
-            "2 live nodes must survive compaction")
-    }
-
-    func testCompactOnCleanGraphReturnsZeroRemovals() async throws {
-        let mutator = try makeTableMutator()
-
-        let p = Database.Partition.test(id: "p0", documentId: "doc0",
-                                    embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: 5500))
-        await mutator.put(id: "doc0", partitions: [p], request: .test())
-
-        let result = await mutator.compact()
-        XCTAssertEqual(result.removedNodes, 0,
-            "compact() on a graph with no deleted nodes must report 0 removals")
-    }
-
-    // MARK: replace()
 
     func testReplaceUpdatesSnapshotAtomically() async throws {
-        let mutator = try makeTableMutator()
+        let mutator = TableMutator.test()
+        mutator.seed(PartitionTable())
 
         let p = Database.Partition.test(id: "p0", documentId: "before",
-                                    embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: 6000))
+                                    embedding: VectorFixtures.random(seed: 6000))
         await mutator.put(id: "before", partitions: [p], request: .test())
 
         var replacement = PartitionTable()
         let newP = Database.Partition.test(id: "p1", documentId: "after",
-                                       embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: 6001))
+                                       embedding: VectorFixtures.random(seed: 6001))
         replacement.put(id: "after", partitions: [newP], request: .test(), logger: .test)
         await mutator.replace(with: replacement)
 
@@ -209,22 +46,25 @@ final class Flow8_IndexQueueTests: XCTestCase {
             "replace() must discard the previous table entirely")
     }
 
-    // MARK: syncEf()
-
-    func testSyncEfUpdatesInMemorySnapshot() async throws {
-        let mutator = try makeTableMutator()
+    func testRemoveDetachesGraphProvenance() async throws {
+        let mutator = TableMutator.test()
+        mutator.seed(PartitionTable())
+        mutator.seedGraph(GraphStore())
 
         let p = Database.Partition.test(id: "p0", documentId: "doc0",
-                                    embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: 7000))
-        await mutator.put(id: "doc0", partitions: [p], request: .test())
+                                    embedding: VectorFixtures.random(seed: 6100))
+        let graph = Database.GraphPayload(entities: [.init(name: "Ada Lovelace", kind: "person")])
+        await mutator.put(id: "doc0", partitions: [p], graph: graph, request: .test())
 
-        await mutator.syncEf(efSearch: 42, emaExplored: 0.75)
+        XCTAssertEqual(mutator.graphSnapshot?.entities.count, 1,
+            "put must upsert the document's entities into the graph store")
 
-        let hnsw = mutator.snapshot?.shards[0]
-        XCTAssertEqual(hnsw?.efSearch, 42,
-            "syncEf must update efSearch in the in-memory snapshot")
-        XCTAssertEqual(Double(hnsw?.emaExplored ?? -1), 0.75, accuracy: 0.001,
-            "syncEf must update emaExplored in the in-memory snapshot")
+        await mutator.remove(id: "doc0")
+
+        XCTAssertFalse(mutator.snapshot?.keys.contains("doc0") ?? true,
+            "remove must delete the document's table entry")
+        XCTAssertEqual(mutator.graphSnapshot?.entities.count, 0,
+            "remove must garbage-collect entities whose provenance became empty")
     }
 
     // =========================================================================
@@ -236,8 +76,6 @@ final class Flow8_IndexQueueTests: XCTestCase {
         // the background init task completes without racing against test puts.
         wipeTotemPersistenceFiles()
         let database = Database()
-        // Await the background HNSW-init task before returning — ensures dedup+compact
-        // finish before any enqueuePut reaches the actor.
         await database.initializationTask.value
         addTeardownBlock { wipeTotemPersistenceFiles() }
         return database
@@ -249,13 +87,7 @@ final class Flow8_IndexQueueTests: XCTestCase {
         let item = Database.BatchPutItem(
             id: "iq-doc1",
             data: [EmbeddingData(embedding: .floats(VectorFixtures.random(seed: 20000)), index: 0)],
-            texts: ["queue put test"],
-            tags: [],
-            tagsEmbedding: nil,
-            mediaType: .text,
-            update: nil,
-            name: nil,
-            metadata: nil
+            texts: ["queue put test"]
         )
         await database.enqueuePut([item], request: .test(ownerId: "iq-owner"))
         _ = await database.removeAll(ownerId: "nonexistent-barrier-owner", request: .test())
@@ -271,19 +103,13 @@ final class Flow8_IndexQueueTests: XCTestCase {
         let item = Database.BatchPutItem(
             id: "iq-table-doc",
             data: [EmbeddingData(embedding: .floats(VectorFixtures.random(seed: 20100)), index: 0)],
-            texts: ["table snapshot test"],
-            tags: [],
-            tagsEmbedding: nil,
-            mediaType: .text,
-            update: nil,
-            name: nil,
-            metadata: nil
+            texts: ["table snapshot test"]
         )
         await database.enqueuePut([item], request: .test(ownerId: "iq-table-owner"))
         _ = await database.removeAll(ownerId: "barrier", request: .test())
 
         XCTAssertTrue(database.table?.keys.contains("iq-table-doc") ?? false,
-            "enqueuePut must insert the document into the global HNSW table")
+            "enqueuePut must insert the document into the partition table")
     }
 
     func testMultipleConcurrentEnqueuePutsAllCommitted() async {
@@ -299,13 +125,7 @@ final class Flow8_IndexQueueTests: XCTestCase {
                     let item = Database.BatchPutItem(
                         id: "multi-doc\(i)",
                         data: [EmbeddingData(embedding: .floats(VectorFixtures.random(seed: UInt64(i + 21000))), index: 0)],
-                        texts: ["multi put \(i)"],
-                        tags: [],
-                        tagsEmbedding: nil,
-                        mediaType: .text,
-                        update: nil,
-            name: nil,
-            metadata: nil
+                        texts: ["multi put \(i)"]
                     )
                     await database.enqueuePut([item], request: .test(ownerId: "multi-owner"))
                 }
@@ -328,13 +148,7 @@ final class Flow8_IndexQueueTests: XCTestCase {
         let item = Database.BatchPutItem(
             id: "order-doc",
             data: [EmbeddingData(embedding: .floats(VectorFixtures.random(seed: 22000)), index: 0)],
-            texts: ["ordering test"],
-            tags: [],
-            tagsEmbedding: nil,
-            mediaType: .text,
-            update: nil,
-            name: nil,
-            metadata: nil
+            texts: ["ordering test"]
         )
         await database.enqueuePut([item], request: .test(ownerId: ownerId))
         await database.enqueueRemoveBatch([(documentId: "order-doc", ownerId: ownerId)])
@@ -353,8 +167,7 @@ final class Flow8_IndexQueueTests: XCTestCase {
             let item = Database.BatchPutItem(
                 id: "count-doc\(i)",
                 data: [EmbeddingData(embedding: .floats(VectorFixtures.random(seed: UInt64(i + 56000))), index: 0)],
-                texts: ["count test \(i)"],
-                tags: [], tagsEmbedding: nil, mediaType: .text, update: nil, name: nil, metadata: nil
+                texts: ["count test \(i)"]
             )
             await database.enqueuePut([item], request: .test(ownerId: ownerId))
         }
@@ -382,13 +195,7 @@ final class Flow8_IndexQueueTests: XCTestCase {
         let item = Database.BatchPutItem(
             id: "noop-doc",
             data: [EmbeddingData(embedding: .floats(VectorFixtures.random(seed: 23000)), index: 0)],
-            texts: ["noop test"],
-            tags: [],
-            tagsEmbedding: nil,
-            mediaType: .text,
-            update: nil,
-            name: nil,
-            metadata: nil
+            texts: ["noop test"]
         )
         await database.enqueuePut([item], request: .test(ownerId: "noop-owner"))
         await database.enqueueRemoveBatch([])
@@ -420,13 +227,7 @@ final class Flow8_IndexQueueTests: XCTestCase {
                     let item = Database.BatchPutItem(
                         id: "doc-\(groupId)",
                         data: [EmbeddingData(embedding: .floats(VectorFixtures.random(seed: UInt64(i + 30000))), index: 0)],
-                        texts: ["text for \(groupId)"],
-                        tags: [],
-                        tagsEmbedding: nil,
-                        mediaType: .text,
-                        update: nil,
-                        name: nil,
-                        metadata: nil
+                        texts: ["text for \(groupId)"]
                     )
                     await database.enqueuePut([item], request: request)
                 }
@@ -457,7 +258,7 @@ final class Flow8_IndexQueueTests: XCTestCase {
         }
     }
 
-    // MARK: Link-only tag propagation (simultaneous-request race)
+    // MARK: Link-only entity propagation (simultaneous-request race)
 
     /// Regression guard for the race where two requests submit the same document
     /// simultaneously.  Request A completes first and registers the document;
@@ -465,10 +266,8 @@ final class Flow8_IndexQueueTests: XCTestCase {
     /// B's `prepared` list is empty, the old code used `databaseReq` (nil metadata) for
     /// `linkOwnerBatch`, creating B's group with no tags.
     ///
-    /// The fix: Phase 1 now preserves texts for link-only results so that
-    /// `groupEnrichedReq` can still run TagGenerator and attach tags.  This test
-    /// verifies that `linkOwnerBatch` called with such a tag-enriched request
-    /// correctly propagates those tags to the newly created group.
+    /// The fix: Phase 1 preserves texts for link-only results so that
+    /// `groupEnrichedReq` can still derive entity names and attach them as group tags.
     func testLinkOnlyDocumentCreatesGroupWithTagsWhenEnrichedRequestUsed() async {
         let database = await makeDatabase()
         let ownerId = "link-race-owner"
@@ -481,12 +280,9 @@ final class Flow8_IndexQueueTests: XCTestCase {
             id: "link-race-doc",
             data: [EmbeddingData(embedding: .floats(VectorFixtures.random(seed: 42000)), index: 0)],
             texts: ["gauge theory fiber bundle connections"],
-            tags: ["gauge", "fiber", "bundle"],
-            tagsEmbedding: nil,
-            mediaType: .text,
-            update: nil,
-            name: nil,
-            metadata: nil
+            graph: .init(entities: [
+                .init(name: "gauge"), .init(name: "fiber"), .init(name: "bundle"),
+            ])
         )
         await database.enqueuePut([item], request: reqA)
         _ = await database.removeAll(ownerId: "barrier", request: .test())
@@ -498,9 +294,9 @@ final class Flow8_IndexQueueTests: XCTestCase {
 
         // ── Step 2: Request B — same doc, new group, arrives after A completed ───
         // BatchEmbeddings would classify "link-race-doc" as link-only (exists in
-        // registry), compute tags from its preserved texts, and call linkOwnerBatch
-        // with a groupEnrichedReq that carries those tags.
-        let computedTags = ["bundle", "fiber", "gauge"]   // TagGenerator output (sorted)
+        // registry), derive entity names from its preserved texts, and call
+        // linkOwnerBatch with a groupEnrichedReq that carries those names as tags.
+        let computedTags = ["bundle", "fiber", "gauge"]   // entity names (sorted)
         let metaB = Database.Group.Metadata(tags: computedTags)
         let groupB = Database.Group.test(id: "link-race-group-b", ownerId: ownerId, metadata: metaB)
         let enrichedReq = DatabaseRequest(ownerId: ownerId, group: groupB,
@@ -521,8 +317,6 @@ final class Flow8_IndexQueueTests: XCTestCase {
 
     /// Contrast test: documents what happens when `linkOwnerBatch` is called with
     /// a bare request (nil group metadata) — the old behavior before the fix.
-    /// Group B ends up with no tags, which is exactly what the fix prevents by
-    /// using `groupEnrichedReq` instead of `databaseReq` in BatchEmbeddings.
     func testLinkOnlyDocumentCreatesGroupWithoutTagsWhenBareRequestUsed() async {
         let database = await makeDatabase()
         let ownerId = "bare-req-owner"
@@ -534,12 +328,7 @@ final class Flow8_IndexQueueTests: XCTestCase {
             id: "bare-req-doc",
             data: [EmbeddingData(embedding: .floats(VectorFixtures.random(seed: 43000)), index: 0)],
             texts: ["quantum mechanics wave function"],
-            tags: ["quantum", "wave"],
-            tagsEmbedding: nil,
-            mediaType: .text,
-            update: nil,
-            name: nil,
-            metadata: nil
+            graph: .init(entities: [.init(name: "quantum"), .init(name: "wave")])
         )
         await database.enqueuePut([item], request: reqA)
         _ = await database.removeAll(ownerId: "barrier", request: .test())
@@ -568,11 +357,6 @@ final class Flow8_IndexQueueTests: XCTestCase {
             id: "meta-doc",
             data: [EmbeddingData(embedding: .floats(VectorFixtures.random(seed: 24000)), index: 0)],
             texts: ["metadata preservation test"],
-            tags: [],
-            tagsEmbedding: nil,
-            mediaType: .text,
-            update: nil,
-            name: nil,
             metadata: payload
         )
         await database.enqueuePut([item], request: .test(ownerId: "meta-owner"))

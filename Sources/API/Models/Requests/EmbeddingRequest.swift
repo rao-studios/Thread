@@ -7,6 +7,19 @@
 
 import Foundation
 
+/// A caller-supplied entity for a document at ingest time. `kind` defaults to `"concept"`.
+struct GraphEntityInput: Codable {
+    let name: String
+    let kind: String?
+}
+
+/// A caller-supplied relationship. `subject`/`object` reference entity names in the same document.
+struct GraphRelationInput: Codable {
+    let subject: String
+    let predicate: String
+    let object: String
+}
+
 struct EmbeddingRequest: Codable {
     let input: EmbeddingInput
     let model: String?
@@ -47,7 +60,11 @@ struct EmbeddingBatchRequest: Codable {
     let sanitize: Bool?
     let update: DatabaseUpdate?
     let totem: DatabaseRequest
-    /// Per-document tags; outer index aligns 1:1 with `inputs`.
+    /// Per-document entities; outer index aligns 1:1 with `inputs`.
+    let entities: [[GraphEntityInput]]?
+    /// Per-document relationships; outer index aligns 1:1 with `inputs`.
+    let relationships: [[GraphRelationInput]]?
+    /// Legacy per-document tags; outer index aligns 1:1 with `inputs`. Mapped to `concept` entities.
     let tags: [[String]]?
     let mediaType: MediaType?
     /// Per-document metadata payloads; outer index aligns 1:1 with `inputs`.
@@ -65,6 +82,8 @@ struct EmbeddingBatchRequest: Codable {
         case sanitize
         case update
         case totem
+        case entities
+        case relationships
         case tags
         case mediaType = "media_type"
         case metadata

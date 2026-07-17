@@ -20,37 +20,16 @@ actor RegistryMutator {
     private let cache: TotemCache<TotemRegistry>
     private let logger: TotemLogger
 
-    // MARK: - WAL (Phase 5 — append-only registry mutations)
-    //
-    // High-frequency mutations (register, linkOwner, accumulateEarnings,
-    // accumulatePerformance) append a small binary record to the WAL instead of
-    // triggering a full PropertyList rewrite of the entire registry.
-    //
-    // A checkpoint (full plist save + WAL truncation) fires when:
-    //   - the WAL grows beyond `walCheckpointThreshold`, or
-    //   - a cold-path mutation (remove, access update, group rename) runs — these
-    //     are infrequent and correctness matters more than write latency there.
-    //
-    // If the WAL cannot be opened, all paths fall back to the Phase 4 1-second
-    // debounced full-save behaviour transparently.
-
-    private var wal:          RegistryWAL?
-    private var walByteCount: Int = 0
-    /// Maximum WAL file size before a checkpoint is forced (default: 16 MB).
-    static let walCheckpointThreshold = 16 * 1024 * 1024
-
-    // MARK: - Debounced disk saves (WAL-unavailable fallback)
+    // MARK: - Debounced disk saves
 
     private var registryDirty = false
     private var flushTask: Task<Void, Never>?
 
-    init(logger: TotemLogger, walURL: URL? = FilePersistence.getDefaultURL().appendingPathComponent("registry-wal")) {
+    init(logger: TotemLogger) {
         self.cache = TotemCache(
             persistence: FilePersistence(key: "registry", kind: .basic, logger: logger.base)
         )
         self.logger = logger
-        self.wal          = walURL.flatMap { try? RegistryWAL(url: $0) }
-        self.walByteCount = wal?.byteSize ?? 0
     }
 
     // MARK: - Startup seeding
@@ -67,58 +46,23 @@ actor RegistryMutator {
     // MARK: - Private
 
     private func loadedRegistry() async -> TotemRegistry {
-        // WAL is replayed once at startup inside Database.initializeRegistry() before the
-        // snapshot is seeded — so the cache is always fully current here.
         return await cache.load { .init() }
     }
 
-    /// Appends `record` to the WAL. If the WAL is unavailable, falls back to a
-    /// 1-second debounced full save. Schedules a checkpoint when the WAL crosses
-    /// `walCheckpointThreshold`.
-    private func appendWAL(_ record: RegistryWALRecord) {
-        if let w = wal {
-            try? w.append(record)
-            walByteCount = w.byteSize
-            if walByteCount >= Self.walCheckpointThreshold { checkpoint() }
-        } else {
-            scheduleSave()
-        }
-    }
-
-    /// Appends multiple WAL records in one pass, then checks the threshold once.
-    private func appendWALBatch(_ records: [RegistryWALRecord]) {
-        if let w = wal {
-            for r in records { try? w.append(r) }
-            walByteCount = w.byteSize
-            if walByteCount >= Self.walCheckpointThreshold { checkpoint() }
-        } else {
-            scheduleSave()
-        }
-    }
-
-    /// Full checkpoint: save the complete registry to disk, then truncate the WAL.
-    /// WAL truncation is deferred until after the save so a crash between the two
-    /// leaves the WAL intact — the next startup replays it and the state is recovered.
-    private func checkpoint() {
+    /// Persists the complete registry to disk now. Cold-path mutations (remove, access
+    /// update, group rename) call this so their durability does not wait on the debounce.
+    private func persistNow() {
         guard let registry = cache.snapshot else { return }
-        walByteCount  = 0
         registryDirty = false
         flushTask?.cancel()
         flushTask     = nil
-        let capturedWal = wal
-        Task {
-            await self.cache.saveNow(registry)
-            try? capturedWal?.truncate()
-        }
+        Task { await self.cache.saveNow(registry) }
     }
 
-    /// Durably flushes the registry to disk and truncates the WAL.
-    /// Call from `Database.shutdown()` to ensure no in-flight checkpoint is lost.
+    /// Durably flushes the registry to disk. Call from `Database.shutdown()`.
     func flushForShutdown() async {
         guard let registry = cache.snapshot else { return }
         await cache.saveNow(registry)
-        try? wal?.truncate()
-        walByteCount  = 0
         registryDirty = false
         flushTask?.cancel()
         flushTask     = nil
@@ -157,29 +101,18 @@ actor RegistryMutator {
         var registry = await loadedRegistry()
         registry.applyRegister(documentId: document.id, ownerId: ownerId, group: group)
         cache.update(registry)
-        appendWAL(.documentRegistered(
-            documentId: document.id,
-            ownerId:    ownerId,
-            group:      group.map { .init(from: $0) }
-        ))
+        scheduleSave()
     }
 
     /// Registers multiple documents in a single actor invocation.
-    /// Loads the registry once, applies all mutations, then appends one WAL record
-    /// per document and checks the threshold once.
+    /// Loads the registry once, applies all mutations, then schedules one debounced save.
     func registerBatch(items: [(document: Database.Document, group: Database.Group?, ownerId: String)]) async {
         var registry = await loadedRegistry()
         for (document, group, ownerId) in items {
             registry.applyRegister(documentId: document.id, ownerId: ownerId, group: group)
         }
         cache.update(registry)
-        appendWALBatch(items.map { (document, group, ownerId) in
-            .documentRegistered(
-                documentId: document.id,
-                ownerId:    ownerId,
-                group:      group.map { .init(from: $0) }
-            )
-        })
+        scheduleSave()
     }
 
     // MARK: - Link Owner
@@ -190,11 +123,7 @@ actor RegistryMutator {
         var registry = await loadedRegistry()
         registry.linkOwner(documentId: documentId, ownerId: ownerId, group: group)
         cache.update(registry)
-        appendWAL(.ownerLinked(
-            documentId: documentId,
-            ownerId:    ownerId,
-            group:      group.map { .init(from: $0) }
-        ))
+        scheduleSave()
     }
 
     /// Links multiple new owners to existing documents in a single actor invocation.
@@ -205,13 +134,7 @@ actor RegistryMutator {
             registry.linkOwner(documentId: documentId, ownerId: ownerId, group: group)
         }
         cache.update(registry)
-        appendWALBatch(items.map { (documentId, group, ownerId) in
-            .ownerLinked(
-                documentId: documentId,
-                ownerId:    ownerId,
-                group:      group.map { .init(from: $0) }
-            )
-        })
+        scheduleSave()
     }
 
     // MARK: - Remove
@@ -234,7 +157,7 @@ actor RegistryMutator {
         }
         let fullyRemoved = registry.remove(documentId: documentId, group: group, owner: owner)
         cache.update(registry)
-        checkpoint()
+        persistNow()
         return (true, fullyRemoved)
     }
 
@@ -270,7 +193,7 @@ actor RegistryMutator {
         registry.ownerDocumentGroup.removeValue(forKey: ownerId)
 
         cache.update(registry)
-        checkpoint()
+        persistNow()
         return (fullyRemoved, documentIds)
     }
 
@@ -290,7 +213,7 @@ actor RegistryMutator {
             if wasLast { fullyRemoved.append(documentId) }
         }
         cache.update(registry)
-        checkpoint()
+        persistNow()
         return fullyRemoved
     }
 
@@ -303,17 +226,17 @@ actor RegistryMutator {
         var registry = await loadedRegistry()
         registry.addEarnings(earnings)
         cache.update(registry)
-        appendWAL(.earningsAccumulated(earnings.map { ($0.key, $0.value) }))
+        scheduleSave()
     }
 
     /// Merges per-document performance updates from a `Sinatra.PrepareResult` into
-    /// `documentStats`. Appends a WAL record so the full registry is not rewritten.
+    /// `documentStats`, then schedules a debounced save.
     func accumulatePerformance(_ updates: [DocumentID: Database.DocumentStats]) async {
         guard !updates.isEmpty else { return }
         var registry = await loadedRegistry()
         registry.addPerformance(updates)
         cache.update(registry)
-        appendWAL(.performanceAccumulated(updates.values.map { .init(from: $0) }))
+        scheduleSave()
     }
 
     // MARK: - Access
@@ -324,7 +247,7 @@ actor RegistryMutator {
         guard registry.documentOwners[id]?.contains(TotemRegistry.Owner(id: ownerId)) == true else { return false }
         registry.updateDocumentAccess(for: id, state: access)
         cache.update(registry)
-        checkpoint()
+        persistNow()
         return true
     }
 
@@ -338,14 +261,14 @@ actor RegistryMutator {
             registry.updateDocumentAccess(for: documentId, state: access)
         }
         cache.update(registry)
-        checkpoint()
+        persistNow()
         return true
     }
 
     /// Replaces the entire in-memory cache and checkpoints immediately.
     func replace(with registry: TotemRegistry) {
         cache.update(registry)
-        checkpoint()
+        persistNow()
     }
 
     @discardableResult
@@ -395,7 +318,7 @@ actor RegistryMutator {
         }
 
         cache.update(registry)
-        checkpoint()
+        persistNow()
         return true
     }
 
@@ -412,7 +335,7 @@ actor RegistryMutator {
         registry.ownersGroups[owner] = ownerGroups
 
         cache.update(registry)
-        checkpoint()
+        persistNow()
         return true
     }
 
@@ -429,7 +352,7 @@ actor RegistryMutator {
         registry.ownersGroups[owner] = ownerGroups
 
         cache.update(registry)
-        checkpoint()
+        persistNow()
         return true
     }
 
@@ -450,6 +373,6 @@ actor RegistryMutator {
             registry.ownersGroups[owner] = ownerGroups
         }
         cache.update(registry)
-        checkpoint()
+        persistNow()
     }
 }

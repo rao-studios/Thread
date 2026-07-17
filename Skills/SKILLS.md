@@ -9,7 +9,7 @@ Maintenance, reference, and operational knowledge for every system in Totem. Use
 ```
 Skills/
 ├── Database/             — Vector database internals
-│   └── README.md         — PartitionTable, HNSW graph, PQ compression, Registry, WAL
+│   └── README.md         — PartitionTable, GraphStore (KG), PQ compression, Registry
 │
 ├── GRPC/                 — gRPC services and Seer session
 │   └── README.md         — Service impls, session stream, mothership registration, dispatcher
@@ -20,11 +20,11 @@ Skills/
 ├── Concurrency/          — Actor design and write serialization
 │   └── README.md         — Database actor, RegistryMutator, TableMutator, IndexQueue
 │
-├── Persistence/          — WAL and memory-mapped storage
-│   └── README.md         — HNSWTopologyWAL, RegistryWAL, HNSWVectorStore (mmap), replay
+├── Persistence/          — Plist snapshots and reconciliation
+│   └── README.md         — Debounced saves, startup sweeps, file layout
 │
 └── API/                  — HTTP routes (standalone mode)
-    └── README.md         — BatchEmbeddings, Search, Library, HNSW routes, request shapes
+    └── README.md         — BatchEmbeddings, Search, Graph, Library routes, request shapes
 ```
 
 ---
@@ -35,11 +35,11 @@ Skills/
 |---|---|
 | Understand how Totem connects to Seer | [GRPC/README.md](GRPC/README.md) |
 | Add or modify a gRPC service | [GRPC/README.md](GRPC/README.md) |
-| Understand the HNSW graph and PQ compression | [Database/README.md](Database/README.md) |
+| Understand the knowledge graph and PQ compression | [Database/README.md](Database/README.md) |
 | Change how documents are indexed or searched | [Database/README.md](Database/README.md) |
 | Add a new embedding backend | [Providers/README.md](Providers/README.md) |
 | Understand actor design and write serialization | [Concurrency/README.md](Concurrency/README.md) |
-| Understand WAL replay and persistence | [Persistence/README.md](Persistence/README.md) |
+| Understand snapshot persistence and reconciliation | [Persistence/README.md](Persistence/README.md) |
 | Add or modify an HTTP route | [API/README.md](API/README.md) |
 
 ---
@@ -49,12 +49,12 @@ Skills/
 | System | What it does |
 |---|---|
 | **Database** | Core actor: owns all search state, routes indexed writes, dispatches searches |
-| **PartitionTable** | Multi-shard container: per-document PQ indices + HNSW proximity graph shards |
-| **HNSW** | Approximate nearest-neighbor graph: multi-layer insert, beam search, shard auto-spawn |
+| **PartitionTable** | Flat per-document PQ index map: parallel ADC scan, entity pre-filter, graph expansion |
+| **GraphStore** | Knowledge graph: content-addressed entities, weighted relationships, BFS traversal |
 | **PQ (PartitionQuantizer)** | Product quantization: compresses 1024-float vectors to compact UInt16 codes |
 | **Registry** | Ownership layer: document-to-owner mapping, deduplication, access control |
 | **GRPC** | Session stream: registers with Seer, dispatches bidirectional session messages |
 | **Providers** | Embedding backends: Mistral API (priority queue) or on-device MLX |
 | **Concurrency** | Mutators: serialized write paths for the registry and partition table |
-| **Persistence** | WAL + mmap: append-only topology and registry logs, memory-mapped vector store |
-| **API** | HTTP routes: standalone index/search/library/HNSW endpoints |
+| **Persistence** | Plist snapshots: debounced full-file saves, startup reconciliation sweeps |
+| **API** | HTTP routes: standalone index/search/graph/library endpoints |

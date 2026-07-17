@@ -9,23 +9,12 @@
 //    Fix: all three deletion paths in Database+Index.swift now call
 //    `partitionStore(for: documentId).purge()`.
 //
-//  Bug 2 — personalGraphResponse stale HNSW nodes:
-//    After a crash, personal HNSW may contain nodes for documents that the
-//    registry no longer knows about for that owner. personalGraphResponse
-//    lacked a registry backstop, so deleted documents surfaced with ownerId: "".
-//    Fix: `allowedDocs = availableDocumentIds ∪ ownersDocuments[ownerKey]`
-//    is computed and used to filter nodes before building the response.
-//
 //  Coverage:
 //    1. Partition text file is written when a document is indexed.
 //    2. FilePersistence.purge() removes the -parts file (mechanism used by fix).
 //    3. Both document files (doc and -parts) can be purged independently.
-//    4. allowedDocs is built correctly from availableDocumentIds ∪ ownersDocuments.
-//    5. Stale HNSW nodes (doc not in allowedDocs) are filtered from the response.
-//    6. Active nodes (doc in allowedDocs) pass the filter.
-//    7. availableDocumentIds alone is sufficient for allowedDocs membership.
-//    8. ownersDocuments alone is sufficient for allowedDocs membership.
-//    9. isDeleted nodes are excluded regardless of allowedDocs.
+//    4. allowedDocs is built correctly from availableDocumentIds ∪ ownersDocuments
+//       (the access set used by search and graph expansion).
 //
 
 import XCTest
@@ -47,25 +36,15 @@ final class Flow16_DeletionCleanupTests: XCTestCase {
         }
     }
 
-    // Convenience: build a TableMutator with a fresh isolated vector store.
-    private func makeTableMutator() throws -> TableMutator {
+    // Convenience: build an isolated TableMutator.
+    private func makeTableMutator() -> TableMutator {
         let nodeId = testNodeId!
-        let vecURL = FilePersistence.getDefaultURL()
-            .appendingPathComponent("shard-\(nodeId)-vectors")
-        let store  = try HNSWVectorStore(url: vecURL, nodeCount: 0)
-
-        var table = PartitionTable()
-        table.shards[0].vectorStore = store
-
         let mutator = TableMutator(nodeId: nodeId, logger: .test)
-        mutator.seed(table)
-        mutator.seedVectorStore(store)
-
+        mutator.seed(PartitionTable())
+        mutator.seedGraph(GraphStore())
         createdKeys += [
-            "shard-\(nodeId)-topology",
-            "shard-\(nodeId)-topology-wal",
-            "shard-\(nodeId)-vectors",
-            "shard-\(nodeId)-indices",
+            "table-\(nodeId)",
+            "graph-\(nodeId)",
         ]
         return mutator
     }
@@ -86,7 +65,7 @@ final class Flow16_DeletionCleanupTests: XCTestCase {
     // =========================================================================
 
     func testPartitionDataFileWrittenOnPut() async throws {
-        let mutator = try makeTableMutator()
+        let mutator = makeTableMutator()
         let docId   = "doc-write-\(testNodeId!)"
         createdKeys.append("documents/\(docId)-parts")
 
@@ -95,9 +74,6 @@ final class Flow16_DeletionCleanupTests: XCTestCase {
             partitions: [makePartition(id: "p0", documentId: docId, seed: 1)],
             request: .test()
         )
-        // Force an immediate checkpoint to flush the debounced indices write.
-        await mutator.replace(with: mutator.snapshot ?? PartitionTable())
-        try await Task.sleep(nanoseconds: 200_000_000)
 
         let partsFile = FilePersistence(key: "documents/\(docId)-parts", kind: .basic, logger: .test)
         let stored: [PartitionData]? = partsFile.restore()
@@ -113,7 +89,7 @@ final class Flow16_DeletionCleanupTests: XCTestCase {
     // =========================================================================
 
     func testPartitionDataFilePurgedByFilePersistence() async throws {
-        let mutator = try makeTableMutator()
+        let mutator = makeTableMutator()
         let docId   = "doc-purge-\(testNodeId!)"
         createdKeys.append("documents/\(docId)-parts")
 
@@ -122,8 +98,6 @@ final class Flow16_DeletionCleanupTests: XCTestCase {
             partitions: [makePartition(id: "p0", documentId: docId, seed: 10)],
             request: .test()
         )
-        await mutator.replace(with: mutator.snapshot ?? PartitionTable())
-        try await Task.sleep(nanoseconds: 200_000_000)
 
         let partsFile = FilePersistence(key: "documents/\(docId)-parts", kind: .basic, logger: .test)
         XCTAssertNotNil(partsFile.restore() as [PartitionData]?,
@@ -140,12 +114,10 @@ final class Flow16_DeletionCleanupTests: XCTestCase {
 
     // =========================================================================
     // MARK: - 3. Both document files can be purged independently
-    //           Verifies that doc and doc-parts are separate keys and can each
-    //           be individually removed (invariant of the multi-path fix).
     // =========================================================================
 
     func testBothDocumentFilesArePurgedIndependently() async throws {
-        let mutator = try makeTableMutator()
+        let mutator = makeTableMutator()
         let docId   = "doc-both-\(testNodeId!)"
         createdKeys += ["documents/\(docId)", "documents/\(docId)-parts"]
 
@@ -158,8 +130,6 @@ final class Flow16_DeletionCleanupTests: XCTestCase {
             partitions: [makePartition(id: "p0", documentId: docId, seed: 20)],
             request: .test()
         )
-        await mutator.replace(with: mutator.snapshot ?? PartitionTable())
-        try await Task.sleep(nanoseconds: 500_000_000)
 
         let partsFile = FilePersistence(key: "documents/\(docId)-parts", kind: .basic, logger: .test)
 
@@ -222,142 +192,5 @@ final class Flow16_DeletionCleanupTests: XCTestCase {
         XCTAssertTrue(allowedDocs.contains("doc-active"))
         XCTAssertFalse(allowedDocs.contains("doc-deleted"),
             "Deleted document must not appear in allowedDocs after registry removal")
-    }
-
-    // =========================================================================
-    // MARK: - 5. Stale HNSW node is filtered when document not in allowedDocs
-    //           Replicates the allowedDocs guard in personalGraphResponse.
-    // =========================================================================
-
-    func testStalePHNSWNodeFilteredWhenDocNotInAllowedDocs() {
-        // Build a stale node for a "deleted" document.
-        let staleNode = HNSWGraph.Node(
-            partitionId: "p-stale",
-            documentId:  "doc-deleted",
-            vectorIndex: 0,
-            level:       0,
-            neighbors:   [[]]
-        )
-
-        // Registry: doc-deleted was removed, so it's in neither set.
-        let registry = TotemRegistry()
-        let ownerKey = TotemRegistry.Owner(id: "owner-c")
-        let allowedDocs = registry.availableDocumentIds
-            .union(registry.ownersDocuments[ownerKey] ?? [])
-
-        // Apply the personalGraphResponse filter.
-        let visible = [staleNode].filter { node in
-            !node.isDeleted && allowedDocs.contains(node.documentId)
-        }
-
-        XCTAssertTrue(visible.isEmpty,
-            "Stale node for a deleted document must be filtered out by allowedDocs check (Bug 2 fix)")
-    }
-
-    // =========================================================================
-    // MARK: - 6. Active node passes allowedDocs filter
-    // =========================================================================
-
-    func testActiveNodePassesAllowedDocsFilter() {
-        let activeNode = HNSWGraph.Node(
-            partitionId: "p-active",
-            documentId:  "doc-active",
-            vectorIndex: 0,
-            level:       0,
-            neighbors:   [[]]
-        )
-
-        var registry = TotemRegistry()
-        let ownerKey = TotemRegistry.Owner(id: "owner-d")
-        registry.availableDocumentIds.insert("doc-active")
-
-        let allowedDocs = registry.availableDocumentIds
-            .union(registry.ownersDocuments[ownerKey] ?? [])
-
-        let visible = [activeNode].filter { node in
-            !node.isDeleted && allowedDocs.contains(node.documentId)
-        }
-
-        XCTAssertEqual(visible.count, 1,
-            "Active node whose document is in allowedDocs must pass the filter")
-    }
-
-    // =========================================================================
-    // MARK: - 7. availableDocumentIds alone is sufficient for allowedDocs
-    // =========================================================================
-
-    func testAvailableDocumentIdsAloneSufficesForAllowedDocs() {
-        let node = HNSWGraph.Node(
-            partitionId: "p0",
-            documentId:  "doc-via-available",
-            vectorIndex: 0,
-            level:       0,
-            neighbors:   [[]]
-        )
-
-        var registry = TotemRegistry()
-        let ownerKey = TotemRegistry.Owner(id: "owner-e")
-        // Document is in availableDocumentIds but NOT ownersDocuments.
-        registry.availableDocumentIds.insert("doc-via-available")
-        // ownersDocuments[ownerKey] is nil.
-
-        let allowedDocs = registry.availableDocumentIds
-            .union(registry.ownersDocuments[ownerKey] ?? [])
-
-        XCTAssertTrue(allowedDocs.contains(node.documentId),
-            "availableDocumentIds alone must grant allowedDocs membership")
-    }
-
-    // =========================================================================
-    // MARK: - 8. ownersDocuments alone is sufficient for allowedDocs
-    // =========================================================================
-
-    func testOwnersDocumentsAloneSufficesForAllowedDocs() {
-        let node = HNSWGraph.Node(
-            partitionId: "p0",
-            documentId:  "doc-via-owned",
-            vectorIndex: 0,
-            level:       0,
-            neighbors:   [[]]
-        )
-
-        var registry = TotemRegistry()
-        let ownerKey = TotemRegistry.Owner(id: "owner-f")
-        // Document is in ownersDocuments but NOT availableDocumentIds.
-        registry.ownersDocuments[ownerKey] = ["doc-via-owned"]
-
-        let allowedDocs = registry.availableDocumentIds
-            .union(registry.ownersDocuments[ownerKey] ?? [])
-
-        XCTAssertTrue(allowedDocs.contains(node.documentId),
-            "ownersDocuments alone must grant allowedDocs membership")
-    }
-
-    // =========================================================================
-    // MARK: - 9. isDeleted nodes excluded regardless of allowedDocs
-    // =========================================================================
-
-    func testDeletedFlagExcludesNodeEvenWhenDocIsAllowed() {
-        let deletedNode = HNSWGraph.Node(
-            partitionId: "p-deleted",
-            documentId:  "doc-allowed",
-            vectorIndex: 0,
-            level:       0,
-            neighbors:   [[]],
-            isDeleted:   true
-        )
-
-        var registry = TotemRegistry()
-        registry.availableDocumentIds.insert("doc-allowed")
-        let ownerKey    = TotemRegistry.Owner(id: "owner-g")
-        let allowedDocs = registry.availableDocumentIds
-            .union(registry.ownersDocuments[ownerKey] ?? [])
-
-        let visible = [deletedNode].filter { node in
-            !node.isDeleted && allowedDocs.contains(node.documentId)
-        }
-
-        XCTAssertTrue(visible.isEmpty,
-            "isDeleted nodes must be excluded even when the document is in allowedDocs")
     }
 }

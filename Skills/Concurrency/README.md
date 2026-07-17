@@ -8,18 +8,18 @@ Totem uses Swift actors throughout. All mutable state lives inside the `Database
 
 `Database` is the root actor. It:
 
-- Owns `TotemRegistry`, `PartitionTable`, and all HNSW shards.
+- Owns `TotemRegistry`, `PartitionTable`, and the `GraphStore`.
 - Serializes all reads and writes through its executor.
-- Replays both WALs on startup before serving any requests.
+- Restores plist snapshots and runs reconciliation sweeps on startup before serving any requests.
 - Exposes async methods used by gRPC service impls and HTTP route handlers.
 
 ---
 
 ## RegistryMutator
 
-`RegistryMutator` serializes all writes to `TotemRegistry` and the `RegistryWAL`.
+`RegistryMutator` serializes all writes to `TotemRegistry`.
 
-Every registry mutation (register, linkOwner, updateAccess) goes through this mutator. It appends to the WAL before updating in-memory state, ensuring that a crash after the append but before the in-memory update is recoverable on replay.
+Every registry mutation (register, linkOwner, updateAccess) goes through this mutator. Hot-path mutations schedule a debounced snapshot; cold-path mutations persist immediately.
 
 File: [RegistryMutator.swift](../../Sources/Database/Mutators/RegistryMutator.swift)
 
@@ -27,9 +27,9 @@ File: [RegistryMutator.swift](../../Sources/Database/Mutators/RegistryMutator.sw
 
 ## TableMutator
 
-`TableMutator` serializes all writes to `PartitionTable` and the `HNSWTopologyWAL`.
+`TableMutator` serializes all writes to `PartitionTable` and `GraphStore` — the two stores mutate as one logical unit.
 
-Every HNSW insertion and partition index update goes through this mutator. It appends graph topology changes to the WAL before updating in-memory state.
+Every partition index update and graph upsert/detach goes through this mutator, then flushes on a shared 1-second debounce.
 
 File: [TableMutator.swift](../../Sources/Database/Mutators/TableMutator.swift)
 
@@ -64,5 +64,5 @@ Files: [TotemCache.swift](../../Sources/Utilities/Database/TotemCache.swift), [D
 ## Rules
 
 - Never mutate `PartitionTable` or `TotemRegistry` directly — always go through the matching mutator.
-- Never skip WAL writes. In-memory updates without WAL entries are lost on restart.
+- Never bypass the mutators. Direct cache writes race with the debounced saves and can be lost on restart.
 - Use `ReadWriteValue` for cache-like state; use `LockedValue` for small critical sections; use actor isolation for everything owned by `Database`.

@@ -1,9 +1,7 @@
 import Foundation
 import Logging
 
-struct DatabaseConfig {
-    var shardSizeThreshold: Int = 2_500
-}
+struct DatabaseConfig {}
 
 actor Database {
     internal let logger: TotemLogger
@@ -36,8 +34,7 @@ actor Database {
         let identity = NodeIdentity.load(override: nodeId, logger: baseLogger)
         self.nodeId = identity.nodeId
 
-        self.tableMutator = TableMutator(nodeId: identity.nodeId, logger: TotemLogger(baseLogger),
-                                         shardSizeThreshold: config.shardSizeThreshold)
+        self.tableMutator = TableMutator(nodeId: identity.nodeId, logger: TotemLogger(baseLogger))
         self.registryMutator = RegistryMutator(logger: TotemLogger(baseLogger))
         self.initializationTask = Task { [self] in
             await self.startup()
@@ -60,7 +57,6 @@ extension Database {
     func startup() async {
         initializeRegistry()
         initializeTable()
-        await initializeHNSW()
     }
 }
 

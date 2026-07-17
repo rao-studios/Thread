@@ -24,7 +24,7 @@ File: [Availability.swift](../../Sources/API/Routes/Availability.swift)
 
 ### `POST /v1/batch/embeddings`
 
-Indexes one or more documents. Each document's text is embedded, compressed, and added to the HNSW graph. Returns immediately — indexing happens in a detached background task.
+Indexes one or more documents. Each document's text is embedded and PQ-compressed, and its entities/relationships are merged into the knowledge graph (LLM extraction runs in the detached enrichment pass when the caller supplies none). Returns immediately — enrichment + indexing happen in a detached background task.
 
 **Request**
 
@@ -109,11 +109,11 @@ File: [Library.swift](../../Sources/API/Routes/Library.swift)
 
 ---
 
-### `POST /v1/hnsw/*`
+### `POST /v1/graph`
 
-HNSW inspection endpoints mirroring the `TotemHNSW` gRPC service: stats, graph nodes, node detail, node deletion.
+Knowledge-graph query: resolve entities by name (`entity`) and/or free-text similarity (`query`, embedded server-side), traverse up to `hops` edges (0–3), and return entities, relationships, linked documents, and graph stats. At least one of `entity` / `query` is required.
 
-File: [HNSW.swift](../../Sources/API/Routes/HNSW.swift)
+File: [Graph.swift](../../Sources/API/Routes/Graph.swift)
 
 ---
 

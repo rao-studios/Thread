@@ -4,16 +4,10 @@
 import Hummingbird
 
 // MARK: - Search
-extension SearchShardStat: ResponseCodable {}
 extension SearchResponse: ResponseCodable {}
 
-// MARK: - HNSW
-extension HNSWGraphStats: ResponseCodable {}
-extension HNSWStatsResponse: ResponseCodable {}
-extension HNSWNodeResponse: ResponseCodable {}
-extension HNSWGraphResponse: ResponseCodable {}
-extension HNSWNodeBatchResponse: ResponseCodable {}
-extension HNSWNodeDeleteResponse: ResponseCodable {}
+// MARK: - Graph
+extension GraphResponse: ResponseCodable {}
 
 // MARK: - Embeddings
 extension EmbeddingResponse: ResponseCodable {}

@@ -7,10 +7,13 @@ import Logging
 final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Sendable {
     let database: Database
     let embeddingProvider: any EmbeddingProviding
+    let graphExtractor: any GraphExtracting
 
-    init(database: Database, embeddingProvider: any EmbeddingProviding) {
+    init(database: Database, embeddingProvider: any EmbeddingProviding,
+         graphExtractor: any GraphExtracting) {
         self.database = database
         self.embeddingProvider = embeddingProvider
+        self.graphExtractor = graphExtractor
     }
 
     // MARK: - Search
@@ -25,6 +28,7 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
         let databaseReq = DatabaseRequest(
             ownerId: request.ownerID,
             groups: groups,
+            entities: request.entities.isEmpty ? nil : Array(request.entities),
             aggregate: request.aggregate,
             scope: request.scope == "global" ? .global : .personal
         )
@@ -47,18 +51,48 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
             embedding: .floats(queryFloats),
             index: 0
         )]
-        let tagEmbedding: [Float]? = request.queryTagEmbedding.isEmpty ? nil :
-            Array(request.queryTagEmbedding)
 
-        await database.nonisolatedTableMutator.waitForIndices()
-
-        let result = await withCheckedContinuation { (cont: CheckedContinuation<Database.SearchResult, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async { [database, databaseReq, queryData, tagEmbedding] in
-                cont.resume(returning: database.search(queryData, queryTagEmbedding: tagEmbedding, database: databaseReq))
+        // Query-side entity embedding: explicit on the request, else embedded from the
+        // caller's entity terms (mirrors the REST search path).
+        var entityEmbedding: [Float]? = request.queryEntityEmbedding.isEmpty ? nil :
+            Array(request.queryEntityEmbedding)
+        if entityEmbedding == nil, !request.entities.isEmpty {
+            let entityString = request.entities.sorted().joined(separator: " ")
+            if let (embeds, _) = try? await embeddingProvider.run(
+                [entityString], logger: database.baseLogger, priority: true
+            ), case let .floats(v) = embeds.first?.embedding {
+                entityEmbedding = v
             }
         }
 
-        let shardLookup = database.table?.documentShardIndex ?? [:]
+        // Table restore is synchronous within startup; gate the first query on it.
+        await database.initializationTask.value
+
+        // Match query entities against the graph (name tokens + content-vector similarity).
+        let matchedEntityIds: Set<EntityID>
+        if let graph = database.graph, !graph.entities.isEmpty {
+            let nameQuery = request.queryText.isEmpty ? nil : request.queryText
+            matchedEntityIds = Set(
+                graph.matchEntities(nameQuery: nameQuery,
+                                    embedding: queryFloats.isEmpty ? nil : queryFloats)
+                    .map { $0.entity.id }
+            )
+        } else {
+            matchedEntityIds = []
+        }
+
+        let capturedEntityEmbedding = entityEmbedding
+        let result = await withCheckedContinuation { (cont: CheckedContinuation<Database.SearchResult, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async { [database, databaseReq, queryData] in
+                cont.resume(returning: database.search(
+                    queryData,
+                    queryEntityEmbedding: capturedEntityEmbedding,
+                    matchedEntityIds: matchedEntityIds,
+                    database: databaseReq
+                ))
+            }
+        }
+
         var response = Totem_V1_TotemSearchResponse()
         response.results = result.partitionWithScores.map { score, partition in
             var r = Totem_V1_TotemPartitionResult()
@@ -68,8 +102,15 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
             r.ownerID = partition.ownerId
             r.text = partition.text
             r.score = score
-            r.shardIndex = Int32(shardLookup[partition.documentId] ?? 0)
+            r.shardIndex = 0
             return r
+        }
+        if let trace = result.trace {
+            var t = Totem_V1_TotemGraphTrace()
+            t.matchedEntityIds = trace.matchedEntityIds
+            t.expansionEdgeIds = trace.expansionEdges
+            t.expandedDocumentCount = Int32(trace.expandedDocumentCount)
+            response.trace = t
         }
         return response
     }
@@ -97,21 +138,47 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
             let texts = Array(item.texts)
             guard !texts.isEmpty else { continue }
 
+            // Provisional entities: caller-provided `entities`, else the legacy `tags`
+            // alias as concept entities, else keyword fallback flagged for LLM extraction.
+            var resolvedEntities: [Database.GraphPayload.EntityIn] = item.entities.map {
+                .init(name: $0.name, kind: $0.kind.isEmpty ? "concept" : $0.kind)
+            }
+            if resolvedEntities.isEmpty {
+                resolvedEntities = item.tags.map { .init(name: $0, kind: "concept") }
+            }
+            let needsExtraction = resolvedEntities.isEmpty
+            if needsExtraction {
+                resolvedEntities = TagGenerator.generate(from: texts).map { .init(name: $0, kind: "concept") }
+            }
+            let relations: [Database.GraphPayload.RelationIn] = item.relationships.map {
+                .init(subject: $0.subject, predicate: $0.predicate, object: $0.object)
+            }
+            let graph = Database.GraphPayload(entities: resolvedEntities, relationships: relations)
+
+            // Embed partitions + one joined-entity-names string (the doc-level entity embedding).
+            var toEmbed = texts
+            toEmbed.append(resolvedEntities.map { $0.name }.joined(separator: " "))
             let (embeddings, _) = try await embeddingProvider.run(
-                texts,
+                toEmbed,
                 logger: database.baseLogger,
                 priority: false
             )
+            let sorted = embeddings.sorted { $0.index < $1.index }
+            let partitionEmbeddings = Array(sorted.dropLast()).enumerated()
+                .map { EmbeddingData(embedding: $0.element.embedding, index: $0.offset) }
+            let entityEmbedding: [Float]?
+            if case .floats(let v) = sorted.last?.embedding { entityEmbedding = v } else { entityEmbedding = nil }
 
             let fullCID = item.documentID
             fullCIDs.append(fullCID)
 
             putItems.append(Database.BatchPutItem(
                 id: fullCID,
-                data: embeddings,
+                data: partitionEmbeddings,
                 texts: texts,
-                tags: Array(item.tags),
-                tagsEmbedding: nil,
+                graph: graph,
+                entityEmbedding: entityEmbedding,
+                needsExtraction: needsExtraction,
                 mediaType: item.mediaType == "image" ? .image : .text,
                 update: nil,
                 name: item.name.isEmpty ? nil : item.name,
@@ -126,7 +193,20 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
             return response
         }
 
-        await database.enqueuePut(putItems, request: databaseReq)
+        // Respond now; enrichment (LLM extraction + entity embedding) runs detached and
+        // enqueues the put — identical shape to the REST ingest path.
+        let capturedItems = putItems
+        let capturedReq = databaseReq
+        Task.detached(priority: .userInitiated) { [database, graphExtractor, embeddingProvider] in
+            let enriched = await GraphEnrichment.run(
+                items: capturedItems,
+                extractor: graphExtractor,
+                embedder: embeddingProvider,
+                existingGraph: database.graph,
+                logger: database.baseLogger
+            )
+            await database.enqueuePut(enriched, request: capturedReq)
+        }
 
         var response = Totem_V1_TotemIndexResponse()
         response.success = true

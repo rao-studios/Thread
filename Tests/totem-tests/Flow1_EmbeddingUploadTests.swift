@@ -3,7 +3,7 @@
 //  database-serverTests
 //
 //  Tests for the document upload flow:
-//  PartitionTable.put() → HNSW insertion → PQ training → registry state.
+//  PartitionTable.put() → PQ training → registry state.
 //
 
 import XCTest
@@ -25,16 +25,6 @@ final class Flow1_EmbeddingUploadTests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
-    /// Creates a PartitionTable with a vector store attached to its shard.
-    /// Required for tests that verify HNSW insertion state (Phase 3+).
-    private func makeTable() throws -> PartitionTable {
-        var table = PartitionTable()
-        table.shards[0].vectorStore = try HNSWVectorStore(
-            url: tempDir.appendingPathComponent("vec-\(UUID().uuidString)"),
-            nodeCount: 0
-        )
-        return table
-    }
 
     // MARK: - PartitionTable.put()
 
@@ -54,18 +44,6 @@ final class Flow1_EmbeddingUploadTests: XCTestCase {
         XCTAssertNotNil(table.indices["doc1"])
     }
 
-    func testPutInsertsEmbeddingsIntoGlobalHNSW() throws {
-        var table = try makeTable()
-        let partitions = [
-            Database.Partition.test(id: "p1", documentId: "doc1", embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: 3)),
-            Database.Partition.test(id: "p2", documentId: "doc1", embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: 4)),
-        ]
-        table.put(id: "doc1", partitions: partitions, request: .test(), logger: .test)
-
-        XCTAssertTrue(table.shards[0].isTrained,
-            "Global HNSW must be active after the first insertion")
-        XCTAssertEqual(table.shards[0].totalInsertions, 2)
-    }
 
     func testPutMultipleDocumentsAllIndexed() {
         var table = PartitionTable()
@@ -115,31 +93,7 @@ final class Flow1_EmbeddingUploadTests: XCTestCase {
         XCTAssertNil(table.indices["doc1"])
     }
 
-    func testPutThenRemoveMarksHNSWNodesDeleted() throws {
-        var table = try makeTable()
-        let p = Database.Partition.test(id: "p1", documentId: "doc1", embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: 31))
-        table.put(id: "doc1", partitions: [p], request: .test(), logger: .test)
-        table.remove(id: "doc1")
 
-        let deletedNodes = table.shards[0].nodes.filter {
-            $0.documentId == "doc1" && $0.isDeleted
-        }
-        XCTAssertEqual(deletedNodes.count, 1)
-    }
-
-    func testHNSWNodeCountGrowsWithMultiplePuts() throws {
-        var table = try makeTable()
-        for i in 0..<5 {
-            let partitions = [
-                Database.Partition.test(id: "p\(i)a", documentId: "d\(i)", embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: UInt64(i * 2 + 100))),
-                Database.Partition.test(id: "p\(i)b", documentId: "d\(i)", embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: UInt64(i * 2 + 101))),
-            ]
-            table.put(id: "d\(i)", partitions: partitions, request: .test(), logger: .test)
-        }
-
-        XCTAssertEqual(table.shards[0].totalInsertions, 10)
-        XCTAssertEqual(table.shards[0].nodes.count, 10)
-    }
 
     // MARK: - TotemRegistry operations
 
@@ -154,15 +108,14 @@ final class Flow1_EmbeddingUploadTests: XCTestCase {
         XCTAssertNil(table.index(for: "doc-empty"))
         // Document ID not tracked as an indexed key
         XCTAssertFalse(table.keys.contains("doc-empty"))
-        // documentShardIndex is set for routing — a re-index lands on the same shard
     }
 
     func testPutWithMixedEmbeddingsIndexesOnlyNonEmpty() throws {
-        var table = try makeTable()
+        var table = PartitionTable()
         let empty = Database.Partition.test(id: "empty-p", documentId: "doc1", embedding: [])
         let real  = Database.Partition.test(
             id: "real-p", documentId: "doc1",
-            embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: 99)
+            embedding: VectorFixtures.random(seed: 99)
         )
         table.put(id: "doc1", partitions: [empty, real], request: .test(), logger: .test)
 

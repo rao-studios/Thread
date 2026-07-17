@@ -59,13 +59,7 @@ final class Flow14_BatchEmbeddingGroupTests: XCTestCase {
         Database.BatchPutItem(
             id: id,
             data: [EmbeddingData(embedding: .floats(VectorFixtures.random(seed: seed)), index: 0)],
-            texts: [text],
-            tags: [],
-            tagsEmbedding: nil,
-            mediaType: .text,
-            update: nil,
-            name: nil,
-            metadata: nil
+            texts: [text]
         )
     }
 

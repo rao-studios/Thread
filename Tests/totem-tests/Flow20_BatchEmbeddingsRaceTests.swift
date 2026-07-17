@@ -52,7 +52,8 @@ final class Flow20_BatchEmbeddingsRaceTests: XCTestCase {
     private func makeApp(database: Database) -> Application<RouterResponder<TotemRequestContext>> {
         let router = Router(context: TotemRequestContext.self)
         let mock = MockEmbeddingProvider()
-        registerBatchEmbeddingsRoute(router, database, embeddingModelProvider: mock)
+        registerBatchEmbeddingsRoute(router, database, embeddingModelProvider: mock,
+                                     graphExtractor: KeywordGraphExtractionProvider())
         return Application(router: router)
     }
 
@@ -103,6 +104,18 @@ final class Flow20_BatchEmbeddingsRaceTests: XCTestCase {
         return result!
     }
 
+    /// The ingest route responds before the detached enrichment task enqueues the
+    /// put — poll until `predicate` holds (or fail after `timeout`).
+    private func waitFor(_ what: String, timeout: TimeInterval = 10,
+                         predicate: @escaping () -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if predicate() { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTFail("\(what) did not become true within \(timeout)s")
+    }
+
     // =========================================================================
     // MARK: - Race condition: same document in two sequential requests
     // =========================================================================
@@ -130,10 +143,14 @@ final class Flow20_BatchEmbeddingsRaceTests: XCTestCase {
                                    texts: sharedTexts)
         XCTAssertTrue(resA.success, "Request A must succeed")
 
-        // Drain IndexQueue so the document is fully registered before B's Phase 1.
+        // The route responds before the detached enrichment enqueues the put —
+        // wait until the document is fully registered before B's Phase 1.
+        let owner = TotemRegistry.Owner(id: ownerId)
+        await waitFor("Group A registered") {
+            database.registry?.ownersGroups[owner]?.contains { $0.id == "race-group-a" } ?? false
+        }
         _ = await database.removeAll(ownerId: "barrier", request: .test())
 
-        let owner = TotemRegistry.Owner(id: ownerId)
         let groupA = database.registry?.ownersGroups[owner]?
             .first { $0.id == "race-group-a" }
         XCTAssertNotNil(groupA, "Group A must be registered after Request A drains")
@@ -149,8 +166,10 @@ final class Flow20_BatchEmbeddingsRaceTests: XCTestCase {
         XCTAssertTrue(resB.success, "Request B must succeed")
 
         // Give linkOwnerBatch (background Task) time to execute.
+        await waitFor("Group B registered") {
+            database.registry?.ownersGroups[owner]?.contains { $0.id == "race-group-b" } ?? false
+        }
         _ = await database.removeAll(ownerId: "barrier", request: .test())
-        try await Task.sleep(nanoseconds: 50_000_000)
 
         // ── Assert: group B has tags from the link-only enriched request ──────
         let groupB = database.registry?.ownersGroups[owner]?
@@ -175,9 +194,12 @@ final class Flow20_BatchEmbeddingsRaceTests: XCTestCase {
                                   groupId: "prepared-group", groupLabel: "Physics",
                                   texts: ["quantum field theory gauge boson interactions"])
         XCTAssertTrue(res.success, "Request must succeed")
+        let owner = TotemRegistry.Owner(id: ownerId)
+        await waitFor("Group registered") {
+            database.registry?.ownersGroups[owner]?.contains { $0.id == "prepared-group" } ?? false
+        }
         _ = await database.removeAll(ownerId: "barrier", request: .test())
 
-        let owner = TotemRegistry.Owner(id: ownerId)
         let group = database.registry?.ownersGroups[owner]?
             .first { $0.id == "prepared-group" }
         XCTAssertNotNil(group, "Group must be registered")

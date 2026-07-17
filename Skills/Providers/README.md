@@ -25,7 +25,7 @@ Totem supports two embedding backends, selected at startup via `--use-mlx`. Both
 - No API key or network access needed after download.
 - Default model: `mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ`.
 - Override with `--mlx-model <hub-model-id>`.
-- Model: 1024 dimensions (must match Mistral's output dimension — HNSW graphs are not interchangeable between models).
+- Model: 1024 dimensions (must match Mistral's output dimension — PQ indices are not interchangeable between models).
 
 **Switching models**: if you change `--mlx-model`, any existing WAL data was indexed under the old model's embedding space. Rebuild the index from scratch or use a separate data directory.
 

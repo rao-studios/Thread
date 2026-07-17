@@ -17,8 +17,7 @@ import Logging
 /// runtime handles the hop.
 ///
 /// One `PersistenceActor` is created per logical file:
-///   - `TotemCache<Value>` owns one for the table and one for the registry.
-///   - `PersonalHNSWMutator` owns one per `ownerId`.
+///   - `TotemCache<Value>` owns one each for the table, graph, and registry.
 actor PersistenceActor {
     private let persistence: FilePersistence
 
@@ -40,42 +39,5 @@ actor PersistenceActor {
     /// Removes the backing file from disk.
     func purge() {
         persistence.purge()
-    }
-}
-
-// MARK: - IndicesPersistenceActor
-
-/// Serializes all shard-indices saves for a single node.
-///
-/// `TableMutator.saveIndicesAsync()` is called from seven sites — `scheduleSave`,
-/// `flushIndicesIfDirty`, `checkpoint`, `flushIfDirty`, `remove`, `removeAll`,
-/// and `replace`. Before this actor was introduced, each call spawned an
-/// independent `Task.detached` that would encode and write all N shard-indices
-/// files concurrently. With 59 shards at ~500 KB each, multiple concurrent tasks
-/// allocated ~29 MB of PropertyList buffers simultaneously, causing OOM crashes
-/// inside `FilePersistence.save → data.write(to:options:.atomic)`.
-///
-/// Routing through this actor ensures at most one save runs at a time and that
-/// later calls automatically queue behind the current one.
-actor IndicesPersistenceActor {
-    private let nodeId: UUID
-    private let logger: Logger
-
-    init(nodeId: UUID, logger: Logger) {
-        self.nodeId  = nodeId
-        self.logger  = logger
-    }
-
-    /// Writes each shard's PQ-index dictionary to its own file sequentially.
-    /// The actor serialises concurrent callers, so no two writes ever race on
-    /// the same `shard-<nodeId>-<i>-indices` path.
-    func save(shards: [HNSWShard]) {
-        for i in shards.indices {
-            FilePersistence(
-                key:    "shard-\(nodeId)-\(i)-indices",
-                kind:   .basic,
-                logger: logger
-            ).save(state: shards[i].indices)
-        }
     }
 }

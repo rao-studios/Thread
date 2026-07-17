@@ -5,7 +5,8 @@ private struct PreparedInput {
     let index: Int
     let texts: [String]
     let documentId: String
-    let tags: [String]
+    let providedEntities: [Database.GraphPayload.EntityIn]
+    let providedRelations: [Database.GraphPayload.RelationIn]
     let name: String?
     let metadata: Data?
 }
@@ -13,25 +14,38 @@ private struct PreparedInput {
 private struct LinkOnlyInput {
     let documentId: String
     let texts: [String]
-    let tags: [String]
+    let providedEntities: [Database.GraphPayload.EntityIn]
 }
 
 private struct DocumentEmbed {
     let preparedInput: PreparedInput
     let toEmbed: [String]
-    let allTags: [String]
+    /// Resolved entity names (caller-provided, or keyword fallback) — the string embedded as
+    /// the document-level entity embedding.
+    let entityNames: [String]
+    /// The resolved graph payload merged into the store at index time.
+    let graph: Database.GraphPayload
+    /// True when entities were only keyword placeholders — LLM extraction should replace them.
+    let needsExtraction: Bool
+}
+
+/// Bounds-safe per-document lookup for the parallel outer arrays on the request.
+private func elementAt<T>(_ array: [T]?, _ index: Int) -> T? {
+    guard let array, index < array.count else { return nil }
+    return array[index]
 }
 
 func registerBatchEmbeddingsRoute(
     _ app: some RouterMethods<TotemRequestContext>,
     _ database: Database,
-    embeddingModelProvider: some EmbeddingProviding
+    embeddingModelProvider: some EmbeddingProviding,
+    graphExtractor: any GraphExtracting
 ) {
     app.post("/v1/batch/embeddings") { request, context async throws -> EmbeddingBatchResponse in
         let embeddingRequest = try await request.decode(as: EmbeddingBatchRequest.self, context: context)
         let baseReq = embeddingRequest.totem.withRequestID(context.id)
         let databaseReq: DatabaseRequest = baseReq.ownerId.isEmpty
-            ? DatabaseRequest(ownerId: "\(database.nodeId.uuidString)-totem", group: baseReq.group, groups: baseReq.groups, tags: baseReq.tags, aggregate: baseReq.aggregate, scope: baseReq.scope, requestID: baseReq.requestID)
+            ? DatabaseRequest(ownerId: "\(database.nodeId.uuidString)-totem", group: baseReq.group, groups: baseReq.groups, entities: baseReq.entities, tags: baseReq.tags, aggregate: baseReq.aggregate, scope: baseReq.scope, requestID: baseReq.requestID)
             : baseReq
         let logger = database.logger
         let embeddingReqId = "emb-\(UUID().uuidString)"
@@ -114,26 +128,40 @@ func registerBatchEmbeddingsRoute(
         var prepared: [PreparedInput] = []
         var linkOnlyItems: [LinkOnlyInput] = []
 
+        // Resolve a document's caller-provided entities: explicit `entities`, else the legacy
+        // `tags` alias mapped to `concept` entities, else empty.
+        func providedEntities(at index: Int) -> [Database.GraphPayload.EntityIn] {
+            if let e = elementAt(embeddingRequest.entities, index) {
+                return e.map { .init(name: $0.name, kind: $0.kind ?? "concept") }
+            }
+            if let t = elementAt(embeddingRequest.tags, index) {
+                return t.map { .init(name: $0, kind: "concept") }
+            }
+            return []
+        }
+        func providedRelations(at index: Int) -> [Database.GraphPayload.RelationIn] {
+            (elementAt(embeddingRequest.relationships, index) ?? []).map {
+                .init(subject: $0.subject, predicate: $0.predicate, object: $0.object)
+            }
+        }
+
         for result in preprocessResults {
             if result.linkOnly, let documentId = result.documentId {
                 linkOnlyItems.append(LinkOnlyInput(
                     documentId: documentId,
                     texts: result.texts ?? [],
-                    tags: embeddingRequest.tags?[result.index] ?? []
+                    providedEntities: providedEntities(at: result.index)
                 ))
             } else if result.texts != nil, let documentId = result.documentId {
-                let docTags = embeddingRequest.tags?[result.index] ?? []
-                let docName: String? = {
-                    guard let names = embeddingRequest.names, result.index < names.count else { return nil }
-                    return names[result.index]
-                }()
+                let docName: String? = elementAt(embeddingRequest.names, result.index) ?? nil
                 prepared.append(PreparedInput(
                     index: result.index,
                     texts: result.texts!,
                     documentId: documentId,
-                    tags: docTags,
+                    providedEntities: providedEntities(at: result.index),
+                    providedRelations: providedRelations(at: result.index),
                     name: docName,
-                    metadata: embeddingRequest.metadata?[result.index]
+                    metadata: elementAt(embeddingRequest.metadata, result.index) ?? nil
                 ))
             } else if result.documentId != nil {
                 skippedCount += 1
@@ -142,14 +170,19 @@ func registerBatchEmbeddingsRoute(
             }
         }
 
+        // Group metadata keeps a flat tag list for display; populate it from entity names
+        // (caller-provided, or keyword fallback) so the external `Group.Metadata.tags` shape
+        // is preserved.
         let groupEnrichedReq: DatabaseRequest = {
             guard var g = databaseReq.group else { return databaseReq }
             let existingTags = g.metadata?.tags ?? []
             let preparedTags = prepared.flatMap { item in
-                item.tags.isEmpty ? TagGenerator.generate(from: item.texts) : item.tags
+                item.providedEntities.isEmpty ? TagGenerator.generate(from: item.texts)
+                                              : item.providedEntities.map { $0.name }
             }
             let linkOnlyTags = linkOnlyItems.flatMap { item in
-                item.tags.isEmpty ? TagGenerator.generate(from: item.texts) : item.tags
+                item.providedEntities.isEmpty ? TagGenerator.generate(from: item.texts)
+                                              : item.providedEntities.map { $0.name }
             }
             let mergedTags = Array(Set(existingTags + preparedTags + linkOnlyTags)).sorted()
             guard !mergedTags.isEmpty else { return databaseReq }
@@ -157,7 +190,7 @@ func registerBatchEmbeddingsRoute(
             meta.tags = mergedTags
             g.metadata = meta
             return DatabaseRequest(ownerId: databaseReq.ownerId, group: g,
-                               groups: databaseReq.groups, tags: databaseReq.tags,
+                               groups: databaseReq.groups, entities: databaseReq.entities, tags: databaseReq.tags,
                                aggregate: databaseReq.aggregate, scope: databaseReq.scope,
                                requestID: databaseReq.requestID)
         }()
@@ -169,17 +202,25 @@ func registerBatchEmbeddingsRoute(
             )
         }
 
-        // ── Phase 2: Generate tags + embed texts ─────────────────────────────────
+        // ── Phase 2: Resolve entities + embed texts ─────────────────────────────
         var totalPromptTokens = 0
 
         if !prepared.isEmpty {
             let docEmbeds: [DocumentEmbed] = prepared.map { item in
-                let allTags = item.tags.isEmpty
-                    ? TagGenerator.generate(from: item.texts)
-                    : item.tags
+                // Provisional entities: caller-provided, else keyword fallback (concept kind).
+                // `needsExtraction` marks the fallback docs for LLM enrichment downstream.
+                let needsExtraction = item.providedEntities.isEmpty
+                let resolvedEntities: [Database.GraphPayload.EntityIn] = needsExtraction
+                    ? TagGenerator.generate(from: item.texts).map { .init(name: $0, kind: "concept") }
+                    : item.providedEntities
+                let entityNames = resolvedEntities.map { $0.name }
+                let payload = Database.GraphPayload(entities: resolvedEntities,
+                                                    relationships: item.providedRelations)
                 var toEmbed = item.texts
-                toEmbed.append(allTags.joined(separator: " "))
-                return DocumentEmbed(preparedInput: item, toEmbed: toEmbed, allTags: allTags)
+                toEmbed.append(entityNames.joined(separator: " "))
+                return DocumentEmbed(preparedInput: item, toEmbed: toEmbed,
+                                     entityNames: entityNames, graph: payload,
+                                     needsExtraction: needsExtraction)
             }
 
             let allToEmbed = docEmbeds.flatMap { $0.toEmbed }
@@ -208,15 +249,16 @@ func registerBatchEmbeddingsRoute(
 
                 let partitionEmbeddings: [EmbeddingData] = Array(slice.dropLast()).enumerated()
                     .map { EmbeddingData(embedding: $0.element.embedding, index: $0.offset) }
-                let tagsEmbedding: [Float]?
-                if case .floats(let v) = slice.last?.embedding { tagsEmbedding = v } else { tagsEmbedding = nil }
+                let entityEmbedding: [Float]?
+                if case .floats(let v) = slice.last?.embedding { entityEmbedding = v } else { entityEmbedding = nil }
 
                 batchItems.append(Database.BatchPutItem(
                     id: docEmbed.preparedInput.documentId,
                     data: partitionEmbeddings,
                     texts: docEmbed.preparedInput.texts,
-                    tags: docEmbed.allTags,
-                    tagsEmbedding: tagsEmbedding,
+                    graph: docEmbed.graph,
+                    entityEmbedding: entityEmbedding,
+                    needsExtraction: docEmbed.needsExtraction,
                     mediaType: mediaType,
                     update: embeddingRequest.update,
                     name: docEmbed.preparedInput.name,
@@ -237,7 +279,14 @@ func registerBatchEmbeddingsRoute(
             let capturedReq = groupEnrichedReq
             let capturedItems = batchItems
             Task.detached(priority: .userInitiated) {
-                await database.enqueuePut(capturedItems, request: capturedReq)
+                let enriched = await GraphEnrichment.run(
+                    items: capturedItems,
+                    extractor: graphExtractor,
+                    embedder: embeddingModelProvider,
+                    existingGraph: database.graph,
+                    logger: logger.base
+                )
+                await database.enqueuePut(enriched, request: capturedReq)
             }
         }
 

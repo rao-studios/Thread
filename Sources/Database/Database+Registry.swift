@@ -5,17 +5,6 @@ extension Database {
         let storage = registryStore
         var registry: TotemRegistry = storage.restore() ?? .init()
 
-        let walURL = FilePersistence.getDefaultURL().appendingPathComponent("registry-wal")
-        if let w = try? RegistryWAL(url: walURL),
-           let records = try? w.readAll(), !records.isEmpty {
-            for record in records { record.apply(to: &registry) }
-            logger.info(
-                "Registry Init",
-                "⚜️ Replayed \(records.count) WAL record(s)",
-                service: .database
-            )
-        }
-
         if registry.availableDocumentIds.isEmpty && !registry.documentAccess.isEmpty {
             registry.availableDocumentIds = Set(
                 registry.documentAccess.compactMap { $0.value == .available ? $0.key : nil }

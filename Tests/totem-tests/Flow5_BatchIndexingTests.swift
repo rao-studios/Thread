@@ -227,10 +227,10 @@ final class Flow5_BatchIndexingTests: XCTestCase {
         let mutator = TableMutator.test()
         mutator.seed(.init())
 
-        let items = (0..<5).map { i -> (id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
+        let items = (0..<5).map { i -> (id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, entityEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
             let p = Database.Partition.test(id: "p\(i)", documentId: "doc\(i)",
                                         embedding: VectorFixtures.random(seed: UInt64(i + 200)))
-            return ("doc\(i)", [p], [], nil, nil, .test())
+            return ("doc\(i)", [p], .init(), nil, nil, .test())
         }
         await mutator.putBatch(items: items)
 
@@ -239,23 +239,25 @@ final class Flow5_BatchIndexingTests: XCTestCase {
         for i in 0..<5 { XCTAssertTrue(table.keys.contains("doc\(i)")) }
     }
 
-    func testPutBatchHNSWContainsAllPartitions() async {
+    func testPutBatchIndexesAllPartitions() async {
         let mutator = TableMutator.test()
         mutator.seed(.init())
 
         // 3 documents × 2 partitions each = 6 total HNSW insertions
-        let items = (0..<3).map { i -> (id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
+        let items = (0..<3).map { i -> (id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, entityEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
             let partitions = [
                 Database.Partition.test(id: "p\(i)a", documentId: "doc\(i)",
                                     embedding: VectorFixtures.random(seed: UInt64(i * 2 + 400))),
                 Database.Partition.test(id: "p\(i)b", documentId: "doc\(i)",
                                     embedding: VectorFixtures.random(seed: UInt64(i * 2 + 401))),
             ]
-            return ("doc\(i)", partitions, [], nil, nil, .test())
+            return ("doc\(i)", partitions, .init(), nil, nil, .test())
         }
         await mutator.putBatch(items: items)
 
-        XCTAssertEqual(mutator.snapshot?.shards[0].totalInsertions, 6)
+        let table = mutator.snapshot!
+        let totalSlots = table.indices.values.reduce(0) { $0 + $1.slots.count }
+        XCTAssertEqual(totalSlots, 6)
     }
 
     func testPutBatchEmptyIsNoOp() async {
@@ -273,10 +275,10 @@ final class Flow5_BatchIndexingTests: XCTestCase {
         batchMutator.seed(.init())
         individualMutator.seed(.init())
 
-        let items = (0..<5).map { i -> (id: DocumentID, partitions: [Database.Partition], tags: [String], tagsEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
+        let items = (0..<5).map { i -> (id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, entityEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
             let p = Database.Partition.test(id: "p\(i)", documentId: "doc\(i)",
                                         embedding: VectorFixtures.random(seed: UInt64(i + 600)))
-            return ("doc\(i)", [p], [], nil, nil, DatabaseRequest.test())
+            return ("doc\(i)", [p], .init(), nil, nil, DatabaseRequest.test())
         }
 
         await batchMutator.putBatch(items: items)
@@ -289,8 +291,9 @@ final class Flow5_BatchIndexingTests: XCTestCase {
 
         XCTAssertEqual(bTable.keys.sorted(), iTable.keys.sorted(),
             "Batch and individual puts must produce identical key sets")
-        XCTAssertEqual(bTable.shards[0].totalInsertions, iTable.shards[0].totalInsertions,
-            "Total HNSW insertions must match")
+        let bSlots = bTable.indices.values.reduce(0) { $0 + $1.slots.count }
+        let iSlots = iTable.indices.values.reduce(0) { $0 + $1.slots.count }
+        XCTAssertEqual(bSlots, iSlots, "Total indexed slots must match")
         for i in 0..<5 {
             XCTAssertNotNil(bTable.indices["doc\(i)"])
             XCTAssertNotNil(iTable.indices["doc\(i)"])
@@ -303,7 +306,7 @@ final class Flow5_BatchIndexingTests: XCTestCase {
 
         let p = Database.Partition.test(id: "p0", documentId: "doc0",
                                     embedding: VectorFixtures.random(seed: 999))
-        await mutator.putBatch(items: [("doc0", [p], [], nil, nil, .test())])
+        await mutator.putBatch(items: [("doc0", [p], .init(), nil, nil, .test())])
 
         // snapshot must reflect the mutation synchronously — no disk round-trip needed
         XCTAssertTrue(mutator.snapshot?.keys.contains("doc0") ?? false,

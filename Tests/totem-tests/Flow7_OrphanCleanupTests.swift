@@ -13,7 +13,6 @@
 //      → absent from validIds in table cross-check (initializeTable logic)
 //      → table.remove(id:) called
 //      → PartitionIndex entry removed
-//      → shard.remove(documentId:) called → node marked deleted
 //
 //  Each test covers one link in this chain. The final integration test pins
 //  the entire chain in one shot so future changes cannot silently break any
@@ -25,20 +24,6 @@ import XCTest
 
 final class Flow7_OrphanCleanupTests: XCTestCase {
 
-    // MARK: - Setup
-
-    private var tempDir: URL!
-
-    override func setUpWithError() throws {
-        tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("database-flow7-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-    }
-
-    override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: tempDir)
-    }
-
     // MARK: - Helpers
 
     private func tempPersistence(key: String) -> FilePersistence {
@@ -47,13 +32,6 @@ final class Flow7_OrphanCleanupTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
         }
         return file
-    }
-
-    private func makeVectorStore() throws -> HNSWVectorStore {
-        try HNSWVectorStore(
-            url: tempDir.appendingPathComponent("vec-\(UUID().uuidString)"),
-            nodeCount: 0
-        )
     }
 
     // MARK: - FilePersistence.restore() — missing vs corrupted file
@@ -138,28 +116,27 @@ final class Flow7_OrphanCleanupTests: XCTestCase {
             "availableDocumentIds must not contain orphan after removal")
     }
 
-    // MARK: - PartitionTable.remove — all three structures cleared
+    // MARK: - PartitionTable.remove — keys and indices cleared
 
-    func testTableRemoveClearsKeysIndicesAndHNSW() throws {
+    func testTableRemoveClearsKeysAndIndices() throws {
         var table = PartitionTable()
-        table.shards[0].vectorStore = try makeVectorStore()
 
         let target = [
             Database.Partition.test(id: "pt1", documentId: "target",
-                                embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: 7001)),
+                                embedding: VectorFixtures.random(seed: 7001)),
             Database.Partition.test(id: "pt2", documentId: "target",
-                                embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: 7002)),
+                                embedding: VectorFixtures.random(seed: 7002)),
         ]
         let bystander = [
             Database.Partition.test(id: "pb1", documentId: "bystander",
-                                embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: 7003)),
+                                embedding: VectorFixtures.random(seed: 7003)),
         ]
         table.put(id: "target",    partitions: target,    request: .test(), logger: .test)
         table.put(id: "bystander", partitions: bystander, request: .test(), logger: .test)
 
         XCTAssertTrue(table.keys.contains("target"))
         XCTAssertNotNil(table.indices["target"])
-        XCTAssertEqual(table.shards[0].totalInsertions, 3)
+        XCTAssertEqual(table.indices["target"]?.slots.count, 2)
 
         table.remove(id: "target")
 
@@ -169,31 +146,17 @@ final class Flow7_OrphanCleanupTests: XCTestCase {
             "PartitionIndex must be removed for the deleted document")
         XCTAssertNotNil(table.indices["bystander"],
             "Bystander PartitionIndex must not be affected")
-
-        let deletedTargetNodes = table.shards[0].nodes.filter {
-            $0.documentId == "target" && $0.isDeleted
-        }
-        XCTAssertEqual(deletedTargetNodes.count, 2,
-            "Both partitions of the removed document must be marked deleted in the HNSW")
-
-        let liveBystander = table.shards[0].nodes.filter {
-            $0.documentId == "bystander" && !$0.isDeleted
-        }
-        XCTAssertEqual(liveBystander.count, 1,
-            "Bystander's HNSW node must remain live after removing an unrelated document")
     }
 
     // MARK: - Table cross-check (initializeTable logic)
 
     func testTableCrossCheckPrunesOrphanedDocuments() throws {
         var table = PartitionTable()
-        table.shards[0].vectorStore = try makeVectorStore()
 
         for docId in ["valid", "orphan-a", "orphan-b"] {
             let p = Database.Partition.test(
                 id: "p-\(docId)", documentId: docId,
-                embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim,
-                                                 seed: UInt64(abs(docId.hashValue) % 9999))
+                embedding: VectorFixtures.random(seed: UInt64(abs(docId.hashValue) % 9999))
             )
             table.put(id: docId, partitions: [p], request: .test(), logger: .test)
         }
@@ -210,24 +173,49 @@ final class Flow7_OrphanCleanupTests: XCTestCase {
         XCTAssertNil(table.indices["orphan-a"],  "orphan-a PartitionIndex must be removed")
         XCTAssertNil(table.indices["orphan-b"],  "orphan-b PartitionIndex must be removed")
         XCTAssertNotNil(table.indices["valid"],  "valid PartitionIndex must survive")
+    }
 
-        let deletedCount = table.shards[0].nodes.filter { $0.isDeleted }.count
-        let liveCount    = table.shards[0].nodes.filter { !$0.isDeleted }.count
-        XCTAssertEqual(deletedCount, 2, "Both orphan HNSW nodes must be marked deleted")
-        XCTAssertEqual(liveCount,    1, "Only the valid document's HNSW node must be live")
+    // MARK: - Graph detach on orphan cleanup
+
+    func testOrphanCleanupDetachesGraphProvenance() {
+        var table = PartitionTable()
+        var graph = GraphStore()
+
+        for docId in ["valid", "orphan"] {
+            let payload = Database.GraphPayload(entities: [.init(name: "entity-\(docId)")])
+            let entityIds = graph.upsert(payload, documentId: docId)
+            let p = Database.Partition.test(
+                id: "p-\(docId)", documentId: docId,
+                embedding: VectorFixtures.random(seed: UInt64(abs(docId.hashValue) % 9999))
+            )
+            table.put(id: docId, partitions: [p], entityIds: entityIds,
+                      request: .test(), logger: .test)
+        }
+        XCTAssertEqual(graph.entities.count, 2, "Precondition: one entity per document")
+
+        // initializeTable sweep 1: orphaned table docs detach from the graph too.
+        let validIds: Set<DocumentID> = ["valid"]
+        for id in table.keys.subtracting(validIds) {
+            let entityIds = table.index(for: id)?.entityIds ?? []
+            table.remove(id: id)
+            graph.detach(documentId: id, entityIds: entityIds)
+        }
+
+        XCTAssertEqual(graph.entities.count, 1,
+            "Orphan's entity must be garbage-collected when its provenance empties")
+        XCTAssertNil(graph.entities.values.first { $0.name == "entity-orphan" },
+            "The surviving entity must belong to the valid document")
     }
 
     // MARK: - Full chain integration
 
-    func testFullOrphanChain_CorruptedFilePropagatesCleanlyToTableAndHNSW() throws {
+    func testFullOrphanChain_CorruptedFilePropagatesCleanlyToTable() throws {
         var table = PartitionTable()
-        table.shards[0].vectorStore = try makeVectorStore()
 
         for docId in ["healthy", "corrupted"] {
             let p = Database.Partition.test(
                 id: "p-\(docId)", documentId: docId,
-                embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim,
-                                                 seed: UInt64(abs(docId.hashValue) % 9999))
+                embedding: VectorFixtures.random(seed: UInt64(abs(docId.hashValue) % 9999))
             )
             table.put(id: docId, partitions: [p], request: .test(), logger: .test)
         }
@@ -279,17 +267,5 @@ final class Flow7_OrphanCleanupTests: XCTestCase {
             "PartitionIndex for corrupted doc must be removed")
         XCTAssertNotNil(table.indices["healthy"],
             "PartitionIndex for healthy doc must survive")
-
-        let deletedNodes = table.shards[0].nodes.filter {
-            $0.documentId == "corrupted" && $0.isDeleted
-        }
-        XCTAssertEqual(deletedNodes.count, 1,
-            "HNSW node for the corrupted document must be marked deleted")
-
-        let liveNodes = table.shards[0].nodes.filter {
-            $0.documentId == "healthy" && !$0.isDeleted
-        }
-        XCTAssertEqual(liveNodes.count, 1,
-            "HNSW node for the healthy document must remain live")
     }
 }

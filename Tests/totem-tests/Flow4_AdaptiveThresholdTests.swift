@@ -4,7 +4,6 @@
 //
 //  Tests for the AdaptiveThreshold system:
 //  - Per-document PQ threshold calibration from reconstruction errors
-//  - Per-graph HNSW threshold incremental update
 //  - Document size effect on threshold tightness
 //
 
@@ -25,14 +24,6 @@ final class Flow4_AdaptiveThresholdTests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
-    private func makeGraph() throws -> HNSWGraph {
-        var graph = HNSWGraph()
-        graph.vectorStore = try HNSWVectorStore(
-            url: tempDir.appendingPathComponent("vec-\(UUID().uuidString)"),
-            nodeCount: 0
-        )
-        return graph
-    }
 
     // MARK: - PQ Adaptive Threshold (per-document)
 
@@ -98,60 +89,5 @@ final class Flow4_AdaptiveThresholdTests: XCTestCase {
 
         XCTAssertEqual(pq.adaptiveThreshold!, expected, accuracy: 1e-4,
             "Adaptive threshold must match the formula: max(mean + 1.5σ, distanceThreshold)")
-    }
-
-    // MARK: - HNSW Adaptive Threshold (per-graph)
-
-    func testHNSWThresholdIsInfinityBeforeInserts() {
-        let graph = HNSWGraph()
-        XCTAssertEqual(graph.effectiveThreshold, Float.infinity)
-    }
-
-    func testHNSWThresholdBecomesFiniteAfterInserts() throws {
-        // updateThreshold is throttled to every 64 inserts (totalInsertions % 64 == 0).
-        var graph = try makeGraph()
-        for i in 0..<64 {
-            graph.add(partition: Database.Partition.test(
-                id: "p\(i)", documentId: "d\(i)",
-                embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: UInt64(i + 1000))
-            ))
-        }
-        XCTAssertLessThan(graph.effectiveThreshold, Float.infinity)
-    }
-
-    func testHNSWThresholdIsPositive() throws {
-        var graph = try makeGraph()
-        for i in 0..<20 {
-            graph.add(partition: Database.Partition.test(
-                id: "p\(i)", documentId: "d\(i)",
-                embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: UInt64(i + 1100))
-            ))
-        }
-        XCTAssertGreaterThan(graph.effectiveThreshold, 0)
-    }
-
-    func testHNSWThresholdRemainsFiniteAfterManyInserts() throws {
-        var graph = try makeGraph()
-        for i in 0..<100 {
-            graph.add(partition: Database.Partition.test(
-                id: "p\(i)", documentId: "d\(i)",
-                embedding: VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: UInt64(i + 1200))
-            ))
-        }
-        XCTAssertTrue(graph.effectiveThreshold.isFinite)
-        XCTAssertTrue(graph.effectiveThreshold.isNormal)
-    }
-
-    func testHNSWThresholdIsStableUnderSimilarVectors() throws {
-        // Need ≥ 64 inserts to trigger the throttled updateThreshold call.
-        var graph = try makeGraph()
-        let center = VectorFixtures.random(dim: HNSWVectorStore.vectorDim, seed: 42)
-        for i in 0..<64 {
-            graph.add(partition: Database.Partition.test(
-                id: "p\(i)", documentId: "d\(i)",
-                embedding: VectorFixtures.near(center, seed: UInt64(i + 1300))
-            ))
-        }
-        XCTAssertLessThan(graph.effectiveThreshold, 1000.0)
     }
 }

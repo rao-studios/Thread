@@ -12,7 +12,7 @@ Handles search, indexing, and document removal.
 
 | RPC | Description |
 |---|---|
-| `Search` | HNSW nearest-neighbor search. Accepts `query_text` (Totem embeds) or `query_embedding` (precomputed). |
+| `Search` | Hybrid KG + PQ search. Accepts `query_text` (Totem embeds) or `query_embedding` (precomputed); optional `entities` for graph matching. Response carries a graph trace. |
 | `Index` | Embed and index a batch of documents. Returns immediately; background write queue drains async. |
 | `Remove` | Remove specific document IDs, or all documents for an owner when `document_ids` is empty. |
 
@@ -28,19 +28,15 @@ Paginated document library.
 
 Implementation: [TotemLibraryServiceImpl.swift](../../Sources/GRPC/TotemLibraryServiceImpl.swift)
 
-### TotemHNSW
+### TotemGraph
 
-Graph inspection and node operations.
+Knowledge-graph queries.
 
 | RPC | Description |
 |---|---|
-| `Stats` | Per-owner or per-document HNSW stats (live nodes, max level, trained status, shard count). |
-| `Graph` | Graph nodes filtered by scope (`personal`, `global`, `documents`), shard index, or document IDs. |
-| `NodeBatch` | Bulk lookup of nodes by partition ID. |
-| `Node` | Single partition with full text and all neighbor layers. |
-| `DeleteNode` | Soft-delete a partition from the graph. |
+| `Query` | Resolve seed entities by name and/or free-text similarity (Totem embeds `query`), traverse up to `hops` edges (0–3), return entities, relationships, linked documents, and graph stats. |
 
-Implementation: [TotemHNSWServiceImpl.swift](../../Sources/GRPC/TotemHNSWServiceImpl.swift)
+Implementation: [TotemGraphServiceImpl.swift](../../Sources/Conduit/TotemGraphServiceImpl.swift)
 
 ---
 
@@ -57,7 +53,7 @@ When `--mothership-host` is provided, `MothershipRegistrationClient` starts and 
 `session` RPC: Totem opens a bidirectional stream and holds it open. Traffic flows in both directions over this single connection:
 
 - **Totem → Seer**: periodic pings every 30 s to keep the stream alive.
-- **Seer → Totem**: request payloads (search, index, remove, library, HNSW ops) wrapped in `TotemSessionMessage`.
+- **Seer → Totem**: request payloads (search, index, remove, library, graph, update, stats) wrapped in `TotemSessionMessage`.
 
 `MothershipRequestDispatcher` reads the `payload` oneof from each incoming message, calls the matching service impl, and writes the response back with the same `correlationID`.
 
@@ -91,16 +87,15 @@ message TotemSessionMessage {
     TotemRemoveResponse         remove_response           = 10;
     TotemLibraryRequest         library_request           = 11;
     TotemLibraryResponse        library_response          = 12;
-    TotemHNSWStatsRequest       hnsw_stats_request        = 13;
-    TotemHNSWStatsResponse      hnsw_stats_response       = 14;
-    TotemHNSWGraphRequest       hnsw_graph_request        = 15;
-    TotemHNSWGraphResponse      hnsw_graph_response       = 16;
-    TotemHNSWNodeBatchRequest   hnsw_node_batch_request   = 17;
-    TotemHNSWNodeBatchResponse  hnsw_node_batch_response  = 18;
-    TotemHNSWNodeRequest        hnsw_node_request         = 19;
-    TotemHNSWNodeResponse       hnsw_node_response        = 20;
-    TotemHNSWDeleteNodeRequest  hnsw_delete_node_request  = 21;
-    TotemHNSWDeleteNodeResponse hnsw_delete_node_response = 22;
+    // 13–22 reserved (retired TotemHNSW arms)
+    TotemUpdateGroupRequest     update_group_request      = 23;
+    TotemUpdateGroupResponse    update_group_response     = 24;
+    TotemUpdateDocumentRequest  update_document_request   = 25;
+    TotemUpdateDocumentResponse update_document_response  = 26;
+    TotemStatsRequest           stats_request             = 27;
+    TotemStatsResponse          stats_response            = 28;
+    TotemGraphQueryRequest      graph_request             = 29;
+    TotemGraphQueryResponse     graph_response            = 30;
   }
 }
 ```
@@ -109,8 +104,8 @@ message TotemSessionMessage {
 
 ## Adding a New RPC
 
-1. Add the message and RPC definition to [totem.proto](../../Sources/GRPC/totem.proto).
-2. Regenerate Swift stubs (`protoc` with `grpc-swift` plugin).
+1. Add the message and RPC definition to `Conduit/Protos/totem.proto` (shared package).
+2. Regenerate Swift stubs (`Conduit/scripts/generate.sh`).
 3. Add a `case` to the `payload` oneof in `MothershipRequestDispatcher` that calls the appropriate service impl.
 4. Implement the handler in the relevant `ServiceImpl` file.
 

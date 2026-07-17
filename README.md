@@ -146,6 +146,8 @@ curl http://127.0.0.1:8080/health
 | `--mothership-grpc-port` | _(none)_ | Seer gRPC port |
 | `--use-mlx` | `false` | Use on-device MLX embeddings |
 | `--mlx-model` | `Qwen3-Embedding-0.6B-4bit-DWQ` | Hub model ID for MLX |
+| `--graph-model` | `Qwen3-1.7B-4bit` | Hub model ID for on-device graph extraction |
+| `--no-graph-extraction` | `false` | Disable LLM extraction (keyword entities only) |
 
 ---
 
@@ -155,7 +157,7 @@ curl http://127.0.0.1:8080/health
 ┌───────────────────────────────────────────────────────┐
 │  Seer (Mothership)                                    │
 │  ┌──────────────┐  Fan-out: Search / Index /          │
-│  │ TotemQuery   │  Remove / Library / HNSW ───────────┼──┐
+│  │ TotemQuery   │  Remove / Library / Graph ──────────┼──┐
 │  │ Client       │                                     │  │
 │  └──────┬───────┘                                     │  │
 │         │  gRPC bidirectional Session stream          │  │
@@ -175,15 +177,14 @@ curl http://127.0.0.1:8080/health
 │  gRPC Services (also reachable directly):             │◀─┘
 │    TotemQuery   — search / index / remove             │
 │    TotemLibrary — library (paginated groups)          │
-│    TotemHNSW    — stats / graph / node ops            │
+│    TotemGraph   — knowledge-graph queries             │
 │                                                       │
 │  Database (actor)                                     │
-│    RegistryMutator  ←─ RegistryWAL                    │
-│    TableMutator     ←─ HNSWTopologyWAL                │
-│      PartitionTable (multi-shard)                     │
-│        HNSWShard × N  ──▶  PartitionIndex             │
-│          HNSWGraph    ──▶  HNSWVectorStore (mmap)     │
-│          PartitionQuantizer (PQ codebooks)            │
+│    RegistryMutator  ─▶ TotemRegistry                  │
+│    TableMutator     ─▶ PartitionTable + GraphStore    │
+│      PartitionIndex × M (per-document PQ)             │
+│        PartitionQuantizer (PQ codebooks, ADC)         │
+│      GraphStore (entities + relationships)            │
 └───────────────────────────────────────────────────────┘
 ```
 
@@ -192,7 +193,7 @@ curl http://127.0.0.1:8080/health
 When `--mothership-host` is provided, `MothershipRegistrationClient` starts a persistent loop:
 
 1. **`register` RPC** — Totem sends its UUID, HTTP host, gRPC port, and HTTP port. Seer records the node and returns an acceptance signal. Totem retries every 5 s until accepted.
-2. **`session` RPC** — Totem opens a bidirectional stream and holds it. Totem sends periodic pings every 30 s. Seer sends request payloads (search, index, remove, library, HNSW ops) over the same stream. `MothershipRequestDispatcher` routes each message to the correct service impl and writes the response back with a matching `correlationID`.
+2. **`session` RPC** — Totem opens a bidirectional stream and holds it. Totem sends periodic pings every 30 s. Seer sends request payloads (search, index, remove, library, graph, update, stats) over the same stream. `MothershipRequestDispatcher` routes each message to the correct service impl and writes the response back with a matching `correlationID`.
 3. **`updateAvailability` RPC** — A one-shot call Totem makes when its storage capacity changes (e.g. after a large batch completes). Seer uses this to steer new index requests to nodes that are accepting storage.
 
 If the session drops, `MothershipRegistrationClient` sleeps 5 s and reconnects automatically.
@@ -207,7 +208,7 @@ All services run on `--grpc-port` (default 9090) and are also reachable via the 
 
 | RPC | Request | Response | Description |
 |---|---|---|---|
-| `Search` | `TotemSearchRequest` | `TotemSearchResponse` | HNSW nearest-neighbor search. Accepts raw `query_text` (Totem embeds it) or a precomputed `query_embedding`. |
+| `Search` | `TotemSearchRequest` | `TotemSearchResponse` | Hybrid KG + PQ search. Accepts raw `query_text` (Totem embeds it) or a precomputed `query_embedding`; optional `entities` gate the graph pre-filter. The response carries a `trace` describing entity matches and graph expansion. |
 | `Index` | `TotemIndexRequest` | `TotemIndexResponse` | Embed and index a batch of documents. Returns immediately; async write queue drains in the background. |
 | `Remove` | `TotemRemoveRequest` | `TotemRemoveResponse` | Remove specific document IDs, or all documents for an owner when `document_ids` is empty. |
 
@@ -217,15 +218,11 @@ All services run on `--grpc-port` (default 9090) and are also reachable via the 
 |---|---|---|---|
 | `Library` | `TotemLibraryRequest` | `TotemLibraryResponse` | Paginated list of groups for an owner. `after_id` is a cursor; `limit` controls page size. |
 
-### TotemHNSW
+### TotemGraph
 
 | RPC | Request | Response | Description |
 |---|---|---|---|
-| `Stats` | `TotemHNSWStatsRequest` | `TotemHNSWStatsResponse` | Per-owner or per-document HNSW stats (live nodes, max level, trained status, shard count). |
-| `Graph` | `TotemHNSWGraphRequest` | `TotemHNSWGraphResponse` | Return graph nodes filtered by scope (`personal`, `global`, `documents`), shard index, or document IDs. |
-| `NodeBatch` | `TotemHNSWNodeBatchRequest` | `TotemHNSWNodeBatchResponse` | Bulk lookup of nodes by partition ID. |
-| `Node` | `TotemHNSWNodeRequest` | `TotemHNSWNodeResponse` | Single partition lookup with full text and all neighbor layers. |
-| `DeleteNode` | `TotemHNSWDeleteNodeRequest` | `TotemHNSWDeleteNodeResponse` | Soft-delete a partition from the graph. |
+| `Query` | `TotemGraphQueryRequest` | `TotemGraphQueryResponse` | Resolve seed entities by name and/or free-text similarity (Totem embeds `query`), traverse up to `hops` edges (0–3), and return entities, relationships, linked documents, and graph stats. |
 
 ### Session message envelope
 
@@ -247,16 +244,15 @@ message TotemSessionMessage {
     TotemRemoveResponse         remove_response          = 10;
     TotemLibraryRequest         library_request          = 11;
     TotemLibraryResponse        library_response         = 12;
-    TotemHNSWStatsRequest       hnsw_stats_request       = 13;
-    TotemHNSWStatsResponse      hnsw_stats_response      = 14;
-    TotemHNSWGraphRequest       hnsw_graph_request       = 15;
-    TotemHNSWGraphResponse      hnsw_graph_response      = 16;
-    TotemHNSWNodeBatchRequest   hnsw_node_batch_request  = 17;
-    TotemHNSWNodeBatchResponse  hnsw_node_batch_response = 18;
-    TotemHNSWNodeRequest        hnsw_node_request        = 19;
-    TotemHNSWNodeResponse       hnsw_node_response       = 20;
-    TotemHNSWDeleteNodeRequest  hnsw_delete_node_request = 21;
-    TotemHNSWDeleteNodeResponse hnsw_delete_node_response = 22;
+    // 13–22 reserved (retired TotemHNSW arms)
+    TotemUpdateGroupRequest     update_group_request     = 23;
+    TotemUpdateGroupResponse    update_group_response    = 24;
+    TotemUpdateDocumentRequest  update_document_request  = 25;
+    TotemUpdateDocumentResponse update_document_response = 26;
+    TotemStatsRequest           stats_request            = 27;
+    TotemStatsResponse          stats_response           = 28;
+    TotemGraphQueryRequest      graph_request            = 29;
+    TotemGraphQueryResponse     graph_response           = 30;
   }
 }
 ```
@@ -298,16 +294,17 @@ Groups are logical collections owned by a single owner. Documents inside a group
 }
 ```
 
-### Partition Table & HNSW
+### Partition Table & Knowledge Graph
 
-Each document is split into text chunks (partitions). Each partition gets a 1024-dimensional embedding. Partitions live in:
+Each document is split into text chunks (partitions). Each partition gets a 1024-dimensional embedding. State lives in:
 
-- **PartitionIndex** — per-document index holding PQ-compressed vectors, a tags embedding, learned codebooks, and an optional metadata blob.
-- **PartitionTable** — multi-shard container holding all document indices plus the HNSW proximity graph shards.
-- **HNSWShard / HNSWGraph** — approximate nearest-neighbor graph; each shard handles a slice of the embedding space.
-- **HNSWVectorStore** — memory-mapped binary file for raw float32 embeddings.
+- **PartitionIndex** — per-document index holding PQ-compressed vectors, an entity embedding, learned codebooks, entity linkage, and an optional metadata blob.
+- **PartitionTable** — flat map of document indices; search is a parallel per-document ADC scan with an entity pre-filter.
+- **GraphStore** — the knowledge graph: content-addressed entities (`(kind, normalized name)` merges the same concept across documents), weighted relationships, and document-provenance sets that link the graph back to the vector store.
 
-A new shard is spawned automatically when the active shard crosses the configured node-count threshold.
+At search time, query entities are matched against the graph (name tokens + embedding cosine), the entity pre-filter narrows candidates, the ADC scan ranks partitions, and a one-hop graph expansion pulls in documents linked to neighboring entities (scored with a small penalty so direct hits win ties).
+
+Entities and relationships arrive with the request, or are extracted on-device by a small LLM (`--graph-model`, default Qwen3-1.7B-4bit) in a detached post-response pass — keyword entities serve as the always-available fallback.
 
 ### Product Quantization (PQ)
 
@@ -317,14 +314,11 @@ Codebook size scales dynamically with the training corpus (`scaledCodebookSize`)
 
 If all partitions in a batch fail embedding (e.g. empty text), Totem skips index creation for that document and logs a warning rather than crashing.
 
-### WAL Persistence
+### Persistence
 
-Two write-ahead logs survive restarts:
+All state persists as binary plist snapshots (`table-<nodeId>`, `graph-<nodeId>`, `registry`, `documents/*`) with a 1-second debounced save on the hot path and immediate saves for removes and shutdown.
 
-- **HNSWTopologyWAL** — append-only log of graph topology mutations (node insertions, edge updates).
-- **RegistryWAL** — append-only log of registry mutations (register, linkOwner, updateAccess, earnings).
-
-On startup, both logs are replayed before any requests are served. Nodes present in the WAL but missing a matching `PartitionIndex` are tombstoned by `markIndicesReady` to prevent stale data from surfacing in search.
+On startup, two reconciliation sweeps close the debounce crash window: orphaned table documents are removed (and detached from the graph), and registry documents missing a table index are dropped so re-ingest is not blocked by the dedup check. Legacy shard/WAL artifacts from the previous HNSW format are purged automatically.
 
 ### EmbeddingModelProvider
 
@@ -347,7 +341,7 @@ The HTTP routes are the **standalone path**. In distributed mode all production 
 
 ### `POST /v1/batch/embeddings`
 
-Indexes one or more documents. Each document's text is embedded, compressed, and added to the HNSW graph. The response is returned immediately — indexing happens in a detached background task.
+Indexes one or more documents. Each document's text is embedded and PQ-compressed, and its entities/relationships are merged into the knowledge graph (LLM extraction runs when the caller supplies none). The response is returned immediately — enrichment + indexing happen in a detached background task.
 
 **Request**
 
@@ -501,7 +495,7 @@ Another owner can then find it with `"scope": "global"`.
 ## Notes
 
 - **No authentication.** `owner_id` is taken directly from the request body. Use a reverse proxy (nginx, Caddy) with bearer token enforcement if you expose this to the internet.
-- **Persistence.** The registry and HNSW topology are persisted via WAL files in the process working directory. Do not delete these while the server is running.
+- **Persistence.** The table, graph, and registry are persisted as plist snapshots under the data directory. Do not delete these while the server is running.
 - **Deduplication.** Document IDs are SHA-256 hashes of their content. Submitting the same text twice under a different owner links the second owner to the existing vectors — no re-embedding occurs.
 - **Tag auto-generation.** If no `tags` are supplied, `TagGenerator` derives frequency-weighted keywords from the text. These are embedded separately and used as a pre-filter during search.
 - **Distributed mode.** In distributed mode all fan-out goes through the gRPC session stream. The HTTP routes remain available for direct use and debugging. Multiple Totem nodes can run simultaneously; Seer fans search queries to all active nodes in parallel and merges results.
@@ -514,11 +508,11 @@ Detailed internals and operational docs live in [`Skills/`](Skills/SKILLS.md):
 
 | Skill | Contents |
 |---|---|
-| [Database](Skills/Database/README.md) | PartitionTable, HNSW, PQ, Registry, WAL, search and index flows |
+| [Database](Skills/Database/README.md) | PartitionTable, GraphStore, PQ, Registry, search and index flows |
 | [GRPC](Skills/GRPC/README.md) | Service impls, session stream, mothership registration, dispatcher |
 | [Providers](Skills/Providers/README.md) | Mistral API provider, on-device MLX provider |
 | [Concurrency](Skills/Concurrency/README.md) | Database actor, RegistryMutator, TableMutator, caching primitives |
-| [Persistence](Skills/Persistence/README.md) | HNSWTopologyWAL, RegistryWAL, HNSWVectorStore (mmap), replay order |
+| [Persistence](Skills/Persistence/README.md) | Plist snapshots, debounced saves, startup reconciliation |
 | [API](Skills/API/README.md) | HTTP routes in standalone mode, request/response shapes |
 
 ## Docs
