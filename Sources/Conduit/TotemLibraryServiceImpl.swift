@@ -84,6 +84,58 @@ final class TotemLibraryServiceImpl: Totem_V1_TotemLibrary.SimpleServiceProtocol
         resp.groups = groups.map(toProto)
         return resp
     }
+
+    /// Full document content by id: the partition texts from
+    /// `documents/{id}-parts`, reassembled in stored order (there is no other
+    /// content store). Access mirrors search/graph — caller-owned or publicly
+    /// available; anything else is silently omitted.
+    func documents(
+        request: Totem_V1_TotemDocumentsRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Totem_V1_TotemDocumentsResponse {
+        database.logger.info(nil, "documentsRequest — owner: \(request.ownerID) ids: \(request.documentIds.count)")
+        var resp = Totem_V1_TotemDocumentsResponse()
+        guard let registry = database.registry else { return resp }
+
+        for documentId in request.documentIds {
+            guard registry.isOwnerLinked(documentId, ownerId: request.ownerID)
+                    || registry.availableDocumentIds.contains(documentId) else {
+                continue
+            }
+            // No parts file means nothing to return — content IS the parts.
+            guard let parts = database.partitionDatas(for: documentId), !parts.isEmpty else {
+                continue
+            }
+
+            var content = Totem_V1_TotemDocumentContent()
+            content.id = documentId
+            content.texts = parts.map(\.data)
+            content.mediaType = parts.first?.mediaType.rawValue ?? MediaType.text.rawValue
+
+            if let document = database.document(for: documentId) {
+                content.name = document.name ?? ""
+                content.ownerID = document.ownerId
+                content.createdAt = Int64(document.createdAt.timeIntervalSince1970)
+            } else {
+                content.ownerID = parts.first?.ownerId ?? ""
+            }
+
+            // Group: the caller's own placement wins; fall back to any group
+            // the document belongs to.
+            let groupId = registry.ownerDocumentGroup[request.ownerID]?[documentId]
+                ?? registry.documentGroups[documentId]?.sorted().first
+            if let groupId {
+                content.groupID = groupId
+                if let groupOwner = registry.groupOwners[groupId],
+                   let entry = registry.ownersGroups[groupOwner]?.first(where: { $0.id == groupId }) {
+                    content.groupLabel = entry.label
+                }
+            }
+
+            resp.documents.append(content)
+        }
+        return resp
+    }
 }
 
 private func binaryContains(_ entries: [Database.Group], id: String) -> Bool {

@@ -90,6 +90,15 @@ final class MothershipRequestDispatcher: SessionRequestHandling, Sendable {
             logger.info("MothershipRequestDispatcher: [\(tag)] libraryRequest — done, \(r.groups.count) group(s)")
             response.payload = .libraryResponse(r)
 
+        case .documentsRequest(let req):
+            logger.info("MothershipRequestDispatcher: [\(tag)] documentsRequest — \(req.documentIds.count) id(s) for owner \(req.ownerID)")
+            guard let r = try? await libraryImpl.documents(request: req, context: ctx) else {
+                logger.warning("MothershipRequestDispatcher: [\(tag)] documentsRequest — dispatch failed")
+                return nil
+            }
+            logger.info("MothershipRequestDispatcher: [\(tag)] documentsRequest — done, \(r.documents.count) document(s)")
+            response.payload = .documentsResponse(r)
+
         case .graphRequest(let req):
             logger.info("MothershipRequestDispatcher: [\(tag)] graphRequest — dispatching")
             guard let r = try? await graphImpl.query(request: req, context: ctx) else {
