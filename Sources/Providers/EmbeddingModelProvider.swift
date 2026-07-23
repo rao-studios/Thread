@@ -114,11 +114,19 @@ actor EmbeddingModelProvider: EmbeddingProviding {
         // Create and register a new task before suspending so any concurrent
         // caller that arrives while we await will find it and join.
         let task = Task<EmbedResult, Error> {
+            let slotStart = Date()
             try await self.acquireSlot(priority: priority)
+            let slotWaitMs = Int(Date().timeIntervalSince(slotStart) * 1000)
+            if slotWaitMs > 50 {
+                // A queued waiter means all 3 slots were busy — a priority
+                // search sat behind an in-flight (possibly 256-text) batch.
+                logger.info("[timing] embed slot wait \(slotWaitMs)ms (priority=\(priority))")
+            }
             try Task.checkCancellation()
 
             let outcome: Result<EmbedResult, Error>
             do {
+                let networkStart = Date()
                 let chunks = texts.chunked(by: Self.maxInputsPerBatch)
                 var allData: [EmbeddingData] = []
                 allData.reserveCapacity(texts.count)
@@ -139,7 +147,8 @@ actor EmbeddingModelProvider: EmbeddingProviding {
                     totalUsage = totalUsage.adding(response.usage)
                 }
 
-                logger.debug("Received embeddings successfully (\(chunks.count) batch(es))")
+                let networkMs = Int(Date().timeIntervalSince(networkStart) * 1000)
+                logger.debug("Received embeddings in \(networkMs)ms (\(chunks.count) batch(es), \(texts.count) text(s))")
                 outcome = .success((allData, totalUsage))
             } catch {
                 outcome = .failure(error)

@@ -61,16 +61,19 @@ extension NetworkService {
         // Build URLRequest
         var urlRequest = URLRequest(url: components.url!)
         urlRequest.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
+        if let timeout = request.timeoutInterval {
+            urlRequest.timeoutInterval = timeout
+        }
+
         if !request.ignoresAuthHeader {
             urlRequest.addValue("Bearer \(configuration.base.apiKey)", forHTTPHeaderField: "Authorization")
         }
-        
+
         urlRequest.httpMethod = request.method.rawValue.uppercased()
-        
+
         // Add body for POST requests
         if request.method == .post {
-            urlRequest.httpBody = try JSONSerialization.data(withJSONObject: request.data, options: .prettyPrinted)
+            urlRequest.httpBody = try JSONSerialization.data(withJSONObject: request.data)
         }
         
         return urlRequest

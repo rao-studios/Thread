@@ -14,10 +14,14 @@ extension Requests {
 extension Requests.Embedding {
     struct Get: NetworkRequest {
         typealias Response = Result
-        
+
         var path: String { "v1/embeddings" }
-        
+
         var method: RequestMethod { .post }
+
+        /// A hung embedding call otherwise stalls a chat search for the ~60s
+        /// URLSession default; embeds normally return in well under a second.
+        var timeoutInterval: TimeInterval? { 10 }
         
         let input: [String]
         let model: String

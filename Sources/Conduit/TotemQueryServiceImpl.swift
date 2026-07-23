@@ -9,6 +9,11 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
     let embeddingProvider: any EmbeddingProviding
     let graphExtractor: any GraphExtracting
 
+    /// Search-scoped embedding cache (process-wide: the session dispatcher
+    /// and direct gRPC each hold an impl, both should share hits). The model
+    /// is fixed per process, so text → vector is stable.
+    static let queryEmbeddingCache = QueryEmbeddingCache()
+
     init(database: Database, embeddingProvider: any EmbeddingProviding,
          graphExtractor: any GraphExtracting) {
         self.database = database
@@ -22,6 +27,10 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
         request: Totem_V1_TotemSearchRequest,
         context: GRPCCore.ServerContext
     ) async throws -> Totem_V1_TotemSearchResponse {
+        // The scan is ~0.2ms; the real cost of a search RPC is the query
+        // embedding round-trip(s) — timed here because the PartitionTable
+        // timer starts after embedding and is structurally blind to it.
+        let rpcStart = Date()
         let groups: [Database.Group]? = request.groupIds.isEmpty ? nil :
             request.groupIds.map { Database.Group(id: $0, label: "", ownerId: request.ownerID, documents: []) }
 
@@ -33,37 +42,64 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
             scope: request.scope == "global" ? .global : .personal
         )
 
-        let queryFloats: [Float]
-        if !request.queryEmbedding.isEmpty {
-            queryFloats = Array(request.queryEmbedding)
-        } else if !request.queryText.isEmpty {
-            let (embeds, _) = try await embeddingProvider.run(
-                [request.queryText],
-                logger: database.baseLogger,
-                priority: true
-            )
-            if case let .floats(v) = embeds.first?.embedding { queryFloats = v } else { queryFloats = [] }
-        } else {
-            queryFloats = []
+        // Query + entity embeddings: cache first (repeat chat turns become
+        // zero-round-trip), then ONE batched Mistral call for whatever's
+        // left — the old path issued two sequential calls for entitied
+        // queries where the REST path always batched.
+        var embedMs = 0
+        var cacheHits = 0
+        var queryFloats: [Float] = request.queryEmbedding.isEmpty ? [] : Array(request.queryEmbedding)
+        var entityEmbedding: [Float]? = request.queryEntityEmbedding.isEmpty ? nil :
+            Array(request.queryEntityEmbedding)
+        let entityString = request.entities.isEmpty ? "" :
+            request.entities.sorted().joined(separator: " ")
+
+        var needsQuery = queryFloats.isEmpty && !request.queryText.isEmpty
+        var needsEntity = entityEmbedding == nil && !entityString.isEmpty
+
+        if needsQuery, let cached = Self.queryEmbeddingCache.get(request.queryText) {
+            queryFloats = cached
+            needsQuery = false
+            cacheHits += 1
+        }
+        if needsEntity, let cached = Self.queryEmbeddingCache.get(entityString) {
+            entityEmbedding = cached
+            needsEntity = false
+            cacheHits += 1
+        }
+
+        if needsQuery || needsEntity {
+            var toEmbed: [String] = []
+            if needsQuery { toEmbed.append(request.queryText) }
+            if needsEntity { toEmbed.append(entityString) }
+            let embedStart = Date()
+            if let (embeds, _) = try? await embeddingProvider.run(
+                toEmbed, logger: database.baseLogger, priority: true
+            ) {
+                var cursor = 0
+                if needsQuery {
+                    if let entry = embeds.first(where: { $0.index == cursor }),
+                       case let .floats(v) = entry.embedding {
+                        queryFloats = v
+                        Self.queryEmbeddingCache.cache(request.queryText, vector: v)
+                    }
+                    cursor += 1
+                }
+                if needsEntity {
+                    if let entry = embeds.first(where: { $0.index == cursor }),
+                       case let .floats(v) = entry.embedding {
+                        entityEmbedding = v
+                        Self.queryEmbeddingCache.cache(entityString, vector: v)
+                    }
+                }
+            }
+            embedMs = Int(Date().timeIntervalSince(embedStart) * 1000)
         }
 
         let queryData = [EmbeddingData(
             embedding: .floats(queryFloats),
             index: 0
         )]
-
-        // Query-side entity embedding: explicit on the request, else embedded from the
-        // caller's entity terms (mirrors the REST search path).
-        var entityEmbedding: [Float]? = request.queryEntityEmbedding.isEmpty ? nil :
-            Array(request.queryEntityEmbedding)
-        if entityEmbedding == nil, !request.entities.isEmpty {
-            let entityString = request.entities.sorted().joined(separator: " ")
-            if let (embeds, _) = try? await embeddingProvider.run(
-                [entityString], logger: database.baseLogger, priority: true
-            ), case let .floats(v) = embeds.first?.embedding {
-                entityEmbedding = v
-            }
-        }
 
         // Table restore is synchronous within startup; gate the first query on it.
         await database.initializationTask.value
@@ -112,6 +148,10 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
             t.expandedDocumentCount = Int32(trace.expandedDocumentCount)
             response.trace = t
         }
+        let totalMs = Int(Date().timeIntervalSince(rpcStart) * 1000)
+        database.logger.info(
+            nil,
+            "[timing] search rpc=\(totalMs)ms embed=\(embedMs)ms cache_hits=\(cacheHits) other=\(totalMs - embedMs)ms results=\(response.results.count)")
         return response
     }
 

@@ -11,12 +11,18 @@ protocol RawRequest : Encodable {
     var method : RequestMethod { get }
     var data : [String : Any] { get }
     var dateFormatter : DateFormatter { get }
+    /// Per-request URLRequest timeout; nil = URLSession default (~60s).
+    var timeoutInterval : TimeInterval? { get }
 
     func transform(_ publisher : AnyPublisher<Response, Error>) throws -> AnyPublisher<TransformedResponse, Error>
 }
 
 extension RawRequest {
-    
+
+    var timeoutInterval : TimeInterval? {
+        nil
+    }
+
     var ignoresEndpoint : Bool {
         false
     }

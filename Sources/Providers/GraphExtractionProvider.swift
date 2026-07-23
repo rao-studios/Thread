@@ -114,13 +114,41 @@ actor MistralGraphExtractionProvider: GraphExtracting {
     private let maxInputChars: Int
     private let network: NetworkService
 
+    /// Extraction shares the Mistral account (rate limits, connections) with
+    /// the CHAT-CRITICAL search embeds but not their slot pool — uncapped, a
+    /// deposit burst of 800-token completions can starve the account budget
+    /// a priority search embed is waiting on. Two at a time is plenty for
+    /// background enrichment.
+    private let maxConcurrentExtractions = 2
+    private var activeExtractions = 0
+    private var extractionWaiters: [CheckedContinuation<Void, Never>] = []
+
     init(model: String = "mistral-tiny", maxInputChars: Int = 3_000, logger: Logger) {
         self.model = model
         self.maxInputChars = maxInputChars
         self.network = NetworkService(logger: logger)
     }
 
+    private func acquireExtractionSlot() async {
+        if activeExtractions < maxConcurrentExtractions {
+            activeExtractions += 1
+            return
+        }
+        await withCheckedContinuation { extractionWaiters.append($0) }
+        // Slot handed over directly by release — activeExtractions unchanged.
+    }
+
+    private func releaseExtractionSlot() {
+        if extractionWaiters.isEmpty {
+            activeExtractions -= 1
+        } else {
+            extractionWaiters.removeFirst().resume()
+        }
+    }
+
     func extract(from texts: [String], logger: Logger) async throws -> Database.GraphPayload {
+        await acquireExtractionSlot()
+        defer { releaseExtractionSlot() }
         let policy = ExtractionPolicyStore.current
         let input = String(texts.joined(separator: " ").prefix(maxInputChars))
         let response = try await network.request(
