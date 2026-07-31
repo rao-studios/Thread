@@ -10,51 +10,45 @@ import MLXAccelerate
 
 typealias EntityID = String
 typealias RelationshipID = String
+typealias PredicateID = String
 
-/// A node in the knowledge graph. Entities are content-addressed by `(kind, normalized name)`
-/// so the same concept mentioned across documents merges into one record. Provenance
-/// (`documentIds`) is the inverted index that links the graph back to the vector store.
 struct Entity: Codable {
     let id: EntityID
-    /// First-seen display casing.
     var name: String
-    /// Normalized lowercase type label; defaults to `"concept"`.
     let kind: String
-    /// Raw embedding of `"\(kind): \(name)"`. No PQ — entity count ≪ partition count.
-    var embedding: [Float]?
-    /// Documents this entity was extracted from (entity → docs inverted index).
     var documentIds: Set<DocumentID>
-    /// Number of documents that observed this entity.
     var mentionCount: Int
 }
 
-/// A directed, typed edge between two entities. Weight increments each time the same
-/// triple is observed, so repeatedly-stated relationships rank above one-off mentions.
 struct Relationship: Codable {
     let id: RelationshipID
     let subjectId: EntityID
-    /// Normalized lowercase verb phrase.
     let predicate: String
     let objectId: EntityID
-    /// Reserved for triple verbalization embeddings; nil in v1.
+    /// The semantic vector for the complete subject → predicate → object assertion.
     var embedding: [Float]?
     var documentIds: Set<DocumentID>
     var weight: Int
 }
 
-/// A Spanner-Graph-style projection over the corpus: entities and relationships are plain
-/// records, and the graph is an in-memory structure with inverted indexes. It is not a
-/// separate engine — it shares document IDs with the `PartitionTable` and is persisted as
-/// one plist alongside it.
+struct Predicate: Codable {
+    let id: PredicateID
+    var name: String
+    /// The vector for the relation type independent of a particular pair of entities.
+    var embedding: [Float]?
+    var relationshipCount: Int
+}
+
 struct GraphStore: Codable {
     var entities: [EntityID: Entity] = [:]
     var relationships: [RelationshipID: Relationship] = [:]
-    /// Derived index (entity → incident relationships). NOT persisted — rebuilt from
-    /// `relationships` in `init(from:)`, so it can never go stale on disk.
+    var predicates: [PredicateID: Predicate] = [:]
     var adjacency: [EntityID: Set<RelationshipID>] = [:]
+    var predicateAdjacency: [PredicateID: Set<RelationshipID>] = [:]
 
-    /// Cosine similarity floor for embedding-based entity matching (mirrors the old tag threshold).
-    static let entityMatchThreshold: Float = 0.15
+    static let relationshipMatchThreshold: Float = 0.15
+    static let predicateMatchThreshold: Float = 0.15
+    static let predicateScoreWeight: Float = 0.8
 
     init() {}
 
@@ -63,26 +57,45 @@ struct GraphStore: Codable {
     enum CodingKeys: String, CodingKey {
         case entities
         case relationships
+        case predicates
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         entities      = try c.decodeIfPresent([EntityID: Entity].self, forKey: .entities) ?? [:]
         relationships = try c.decodeIfPresent([RelationshipID: Relationship].self, forKey: .relationships) ?? [:]
-        rebuildAdjacency()
+        predicates    = try c.decodeIfPresent([PredicateID: Predicate].self, forKey: .predicates) ?? [:]
+        rebuildIndexes()
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(entities, forKey: .entities)
         try c.encode(relationships, forKey: .relationships)
+        try c.encode(predicates, forKey: .predicates)
     }
 
-    mutating func rebuildAdjacency() {
+    mutating func rebuildIndexes() {
         adjacency = [:]
+        predicateAdjacency = [:]
+        var predicateCounts: [PredicateID: Int] = [:]
         for (rid, rel) in relationships {
             adjacency[rel.subjectId, default: []].insert(rid)
             adjacency[rel.objectId, default: []].insert(rid)
+            let predicateId = Self.predicateID(rel.predicate)
+            predicateAdjacency[predicateId, default: []].insert(rid)
+            predicateCounts[predicateId, default: 0] += rel.weight
+            if predicates[predicateId] == nil {
+                predicates[predicateId] = Predicate(
+                    id: predicateId, name: rel.predicate, embedding: nil, relationshipCount: 0
+                )
+            }
+        }
+        predicates = predicates.compactMapValues { predicate in
+            guard let count = predicateCounts[predicate.id], count > 0 else { return nil }
+            var updated = predicate
+            updated.relationshipCount = count
+            return updated
         }
     }
 
@@ -110,14 +123,16 @@ struct GraphStore: Codable {
         return Database.computeNumericHash(from: "\(subjectId)|\(p)|\(objectId)")
     }
 
+    static func predicateID(_ predicate: String) -> PredicateID {
+        Database.computeNumericHash(from: predicate.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    static func predicateEmbedString(_ predicate: String) -> String {
+        "Relationship predicate: \(predicate)"
+    }
+
     // MARK: - Upsert
 
-    /// Merges a document's extracted graph into the store and returns the resolved entity IDs
-    /// (the document-level provenance the caller stores in `PartitionIndex.entityIds`).
-    ///
-    /// Merge rule: same `(kind, normalized name)` maps to the same id → union `documentIds`,
-    /// increment `mentionCount`, fill a missing embedding but never overwrite an existing one
-    /// (input text is deterministic, so re-embedding is a no-op).
     mutating func upsert(_ payload: Database.GraphPayload, documentId: DocumentID) -> [EntityID] {
         var resolvedIds: [EntityID] = []
         var nameToId: [String: EntityID] = [:]   // normalized name → id, for relationship resolution
@@ -131,13 +146,10 @@ struct GraphStore: Codable {
             if var existing = entities[id] {
                 existing.documentIds.insert(documentId)
                 existing.mentionCount += 1
-                if existing.embedding == nil, let e = input.embedding { existing.embedding = e }
                 entities[id] = existing
             } else {
                 entities[id] = Entity(
-                    id: id, name: trimmed, kind: kind,
-                    embedding: input.embedding,
-                    documentIds: [documentId], mentionCount: 1
+                    id: id, name: trimmed, kind: kind, documentIds: [documentId], mentionCount: 1
                 )
             }
             nameToId[Self.normalizeName(trimmed)] = id
@@ -157,15 +169,28 @@ struct GraphStore: Codable {
             if var existing = relationships[rid] {
                 existing.documentIds.insert(documentId)
                 existing.weight += 1
+                if existing.embedding == nil { existing.embedding = rel.embedding }
                 relationships[rid] = existing
             } else {
                 relationships[rid] = Relationship(
                     id: rid, subjectId: subjectId, predicate: predicate, objectId: objectId,
-                    embedding: nil, documentIds: [documentId], weight: 1
+                    embedding: rel.embedding, documentIds: [documentId], weight: 1
                 )
             }
             adjacency[subjectId, default: []].insert(rid)
             adjacency[objectId, default: []].insert(rid)
+
+            let predicateId = Self.predicateID(predicate)
+            if var existing = predicates[predicateId] {
+                existing.relationshipCount += 1
+                if existing.embedding == nil { existing.embedding = rel.predicateEmbedding }
+                predicates[predicateId] = existing
+            } else {
+                predicates[predicateId] = Predicate(
+                    id: predicateId, name: predicate, embedding: rel.predicateEmbedding, relationshipCount: 1
+                )
+            }
+            predicateAdjacency[predicateId, default: []].insert(rid)
         }
 
         return resolvedIds
@@ -209,14 +234,12 @@ struct GraphStore: Codable {
                 entities[eid] = entity
             }
         }
+        rebuildIndexes()
     }
 
     // MARK: - Match
 
-    /// Resolves query terms to entities by name-token containment and/or embedding similarity.
-    /// Returns up to `limit` entities, highest score first.
     func matchEntities(nameQuery: String?,
-                       embedding: [Float]?,
                        kinds: Set<String>? = nil,
                        limit: Int = 8) -> [(entity: Entity, score: Float)] {
         var best: [EntityID: Float] = [:]
@@ -236,17 +259,6 @@ struct GraphStore: Codable {
             }
         }
 
-        if let embedding, !embedding.isEmpty {
-            for entity in entities.values {
-                if let kinds, !kinds.contains(entity.kind) { continue }
-                guard let stored = entity.embedding, stored.count == embedding.count else { continue }
-                let score = GraphStore.dot(stored, embedding)
-                if score >= GraphStore.entityMatchThreshold {
-                    best[entity.id] = max(best[entity.id] ?? 0, score)
-                }
-            }
-        }
-
         return best.compactMap { id, score -> (entity: Entity, score: Float)? in
             guard let entity = entities[id] else { return nil }
             return (entity: entity, score: score)
@@ -254,6 +266,44 @@ struct GraphStore: Codable {
         .sorted { $0.score > $1.score }
         .prefix(limit)
         .map { $0 }
+    }
+
+    func matchRelationships(embedding: [Float],
+                            seededBy entityIds: Set<EntityID> = [],
+                            limit: Int = 12)
+        -> [(relationship: Relationship, score: Float, predicateId: PredicateID)] {
+        guard !embedding.isEmpty else { return [] }
+
+        var predicateScores: [PredicateID: Float] = [:]
+        for predicate in predicates.values {
+            guard let stored = predicate.embedding, stored.count == embedding.count else { continue }
+            let score = Self.dot(stored, embedding)
+            if score >= Self.predicateMatchThreshold { predicateScores[predicate.id] = score }
+        }
+
+        var matches: [(relationship: Relationship, score: Float, predicateId: PredicateID)] = []
+        for relationship in relationships.values {
+            let predicateId = Self.predicateID(relationship.predicate)
+            let relationshipScore: Float
+            if let stored = relationship.embedding, stored.count == embedding.count {
+                relationshipScore = Self.dot(stored, embedding)
+            } else {
+                relationshipScore = -.infinity
+            }
+            let predicateScore = (predicateScores[predicateId] ?? -.infinity) * Self.predicateScoreWeight
+            var score = max(relationshipScore, predicateScore)
+            if entityIds.contains(relationship.subjectId) || entityIds.contains(relationship.objectId) {
+                score = max(score, Self.relationshipMatchThreshold)
+            }
+            guard score >= Self.relationshipMatchThreshold else { continue }
+            matches.append((relationship, score, predicateId))
+        }
+        return matches
+            .sorted { lhs, rhs in
+                lhs.score == rhs.score ? lhs.relationship.weight > rhs.relationship.weight : lhs.score > rhs.score
+            }
+            .prefix(limit)
+            .map { $0 }
     }
 
     // MARK: - Traversal
@@ -283,12 +333,26 @@ struct GraphStore: Codable {
     }
 
     /// Union of documents linked to any of the given entities.
-    func documents(linkedTo entityIds: Set<EntityID>) -> Set<DocumentID> {
+    func documents(linkedToEntities entityIds: Set<EntityID>) -> Set<DocumentID> {
         var docs = Set<DocumentID>()
         for eid in entityIds {
             if let e = entities[eid] { docs.formUnion(e.documentIds) }
         }
         return docs
+    }
+
+    func documents(linkedToRelationships relationshipIds: Set<RelationshipID>) -> Set<DocumentID> {
+        relationshipIds.reduce(into: Set<DocumentID>()) { result, id in
+            result.formUnion(relationships[id]?.documentIds ?? [])
+        }
+    }
+
+    func endpointIds(for relationshipIds: Set<RelationshipID>) -> Set<EntityID> {
+        relationshipIds.reduce(into: Set<EntityID>()) { result, id in
+            guard let relationship = relationships[id] else { return }
+            result.insert(relationship.subjectId)
+            result.insert(relationship.objectId)
+        }
     }
 
     // MARK: - Private
@@ -311,17 +375,29 @@ extension Database {
         struct EntityIn: Codable, Sendable {
             var name: String
             var kind: String
-            var embedding: [Float]?
-            init(name: String, kind: String = "concept", embedding: [Float]? = nil) {
+            init(name: String, kind: String = "concept") {
                 self.name = name
                 self.kind = kind
-                self.embedding = embedding
             }
         }
         struct RelationIn: Codable, Sendable {
             var subject: String
             var predicate: String
             var object: String
+            var embedding: [Float]?
+            var predicateEmbedding: [Float]?
+
+            init(subject: String,
+                 predicate: String,
+                 object: String,
+                 embedding: [Float]? = nil,
+                 predicateEmbedding: [Float]? = nil) {
+                self.subject = subject
+                self.predicate = predicate
+                self.object = object
+                self.embedding = embedding
+                self.predicateEmbedding = predicateEmbedding
+            }
         }
         var entities: [EntityIn]
         var relationships: [RelationIn]
@@ -333,8 +409,5 @@ extension Database {
 
         var isEmpty: Bool { entities.isEmpty && relationships.isEmpty }
 
-        /// The entity display names, used to build the document-level entity embedding string
-        /// (the entity analogue of the old `tags.joined(" ")`).
-        var entityNames: [String] { entities.map { $0.name } }
     }
 }

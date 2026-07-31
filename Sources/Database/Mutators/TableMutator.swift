@@ -54,11 +54,10 @@ actor TableMutator {
     func put(id: DocumentID,
              partitions: [Database.Partition],
              graph: Database.GraphPayload = .init(),
-             entityEmbedding: [Float]? = nil,
              metadata: Data? = nil,
              request: DatabaseRequest,
              persistPartitionData: Bool = true) async {
-        await putBatch(items: [(id, partitions, graph, entityEmbedding, metadata, request)],
+        await putBatch(items: [(id, partitions, graph, metadata, request)],
                        persistPartitionData: persistPartitionData)
     }
 
@@ -68,7 +67,7 @@ actor TableMutator {
     ///   *before* calling in, keeping the synchronous plist encode off this actor
     ///   while preserving the invariant that the parts file is durable before the
     ///   document becomes searchable.
-    func putBatch(items: [(id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, entityEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest)],
+    func putBatch(items: [(id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, metadata: Data?, request: DatabaseRequest)],
                   persistPartitionData: Bool = true) async {
         _ = await loadedTable()
         _ = await loadedGraph()
@@ -76,7 +75,7 @@ actor TableMutator {
         // Process one document per actor turn. PQ training for a large document can
         // take a while; reloading the snapshot each iteration and yielding lets other
         // actor work (removes, flushes, shutdown) interleave between documents.
-        for (id, partitions, graph, entityEmbedding, metadata, request) in items {
+        for (id, partitions, graph, metadata, request) in items {
             var table = cache.snapshot ?? PartitionTable()
             var graphStore = graphCache.snapshot ?? GraphStore()
 
@@ -84,8 +83,7 @@ actor TableMutator {
                 savePartitionData(documentId: id, partitions: partitions)
             }
             let entityIds = graphStore.upsert(graph, documentId: id)
-            table.put(id: id, partitions: partitions, entityIds: entityIds,
-                      entityEmbedding: entityEmbedding, metadata: metadata,
+            table.put(id: id, partitions: partitions, entityIds: entityIds, metadata: metadata,
                       request: request, logger: logger)
 
             cache.update(table)
@@ -190,12 +188,8 @@ actor TableMutator {
         return result.survivingId
     }
 
-    /// Replaces a document's graph contribution: detaches its old entity linkage,
-    /// upserts the freshly extracted payload, and updates the index's entity ids
-    /// and doc-level entity embedding. Used by re-extraction.
     func reapplyGraph(documentId: DocumentID,
                       payload: Database.GraphPayload,
-                      entityEmbedding: [Float]?,
                       request: DatabaseRequest) async {
         var table = await loadedTable()
         var graphStore = await loadedGraph()
@@ -204,7 +198,6 @@ actor TableMutator {
         graphStore.detach(documentId: documentId, entityIds: index.entityIds)
         let entityIds = graphStore.upsert(payload, documentId: documentId)
         index.entityIds = entityIds
-        if let entityEmbedding { index.entityEmbedding = entityEmbedding }
         table.indices[documentId] = index
 
         cache.update(table)

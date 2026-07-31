@@ -127,7 +127,7 @@ func registerGraphAdminRoutes(
     app.put("/v1/graph/policy") { request, context async throws -> ExtractionPolicy in
         let policy = try await request.decode(as: ExtractionPolicy.self, context: context)
         ExtractionPolicyStore.update(policy, logger: database.baseLogger)
-        context.logger.info("Extraction policy updated — \(policy.kinds.count) kind(s), coMention=\(policy.coMention?.enabled ?? false), similarity=\(policy.similarity?.enabled ?? false)")
+        context.logger.info("Extraction policy updated — \(policy.kinds.count) kind(s), coMention=\(policy.coMention?.enabled ?? false)")
         return ExtractionPolicyStore.current
     }
 }

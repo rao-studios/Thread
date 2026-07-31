@@ -9,10 +9,10 @@ import Foundation
 
 typealias PartitionSearchResult = (scores: [Float], partitions: [Database.Partition])
 
-/// Trace of the graph fusion applied to a search — which entities matched, which edges the
-/// one-hop expansion traversed, and how many extra documents it pulled in.
 struct GraphSearchTrace {
     var matchedEntityIds: [EntityID] = []
+    var matchedRelationshipIds: [RelationshipID] = []
+    var matchedPredicateIds: [PredicateID] = []
     var expansionEdges: [RelationshipID] = []
     var expandedDocumentCount: Int = 0
 }
@@ -20,9 +20,6 @@ struct GraphSearchTrace {
 /// A table stores documents as per-document PQ indices. Vector search is a parallel ADC
 /// linear scan over the candidate documents; there is no HNSW graph, no sharding, and no WAL.
 ///
-/// The table is a projection partner of the `GraphStore`: each `PartitionIndex` records the
-/// entity IDs its document contributes to the graph, so a query can enter through vector
-/// similarity, through the graph, or fuse both.
 struct PartitionTable: Codable {
     /// All indexed document IDs.
     var keys: Set<DocumentID> = []
@@ -44,7 +41,6 @@ struct PartitionTable: Codable {
     mutating func put(id: DocumentID,
                       partitions: [Database.Partition],
                       entityIds: [EntityID] = [],
-                      entityEmbedding: [Float]? = nil,
                       metadata: Data? = nil,
                       request: DatabaseRequest,
                       logger: TotemLogger) {
@@ -59,8 +55,7 @@ struct PartitionTable: Codable {
             return
         }
         var index = PartitionIndex()
-        index.train(valid, entityIds: entityIds, entityEmbedding: entityEmbedding,
-                    documentId: id, logger: logger)
+        index.train(valid, entityIds: entityIds, documentId: id, logger: logger)
         index.metadata = metadata
         indices[id] = index
         keys.insert(id)
@@ -74,19 +69,10 @@ struct PartitionTable: Codable {
 
     // MARK: - Search
 
-    /// Searches the corpus with a parallel per-document ADC scan.
-    ///
-    /// Candidate documents come from `request.scope` (owner / group / global). An optional
-    /// entity pre-filter narrows the candidate set: documents linked to a matched entity — or
-    /// whose document-level entity embedding is close to `queryEntityEmbedding` — pass, and
-    /// documents with no entities always pass (they simply have no graph presence yet).
-    ///
-    /// After the direct ADC results, an optional one-hop graph expansion pulls in documents
-    /// linked to neighbors of the result/query entities, scored with a small penalty so a
-    /// graph-reached document never outranks an equally-close direct hit.
     func search(embedding: [Float],
-                queryEntityEmbedding: [Float]? = nil,
                 matchedEntityIds: Set<EntityID> = [],
+                matchedRelationshipIds: Set<RelationshipID> = [],
+                matchedPredicateIds: Set<PredicateID> = [],
                 graph: GraphStore? = nil,
                 expand: Bool = true,
                 k: Int = 3,
@@ -104,8 +90,8 @@ struct PartitionTable: Codable {
 
         let ownerKey = TotemRegistry.Owner(id: request.ownerId)
 
-        // ── Candidate set from scope ──────────────────────────────────────────────
         var candidateIds: Set<DocumentID>
+        var scopedIds: Set<DocumentID>?
         switch request.scope {
         case .global:
             candidateIds = registry.availableDocumentIds.union(
@@ -116,6 +102,7 @@ struct PartitionTable: Codable {
                 candidateIds = Set(registry.ownersDocuments[ownerKey] ?? [])
             } else if let gs = request.groups, !gs.isEmpty {
                 candidateIds = Set(gs.flatMap { registry.groups[$0.id] ?? [] })
+                scopedIds = candidateIds
             } else if let groupId = request.group?.id {
                 candidateIds = Set(registry.groups[groupId] ?? [])
             } else {
@@ -123,34 +110,15 @@ struct PartitionTable: Codable {
             }
         }
 
-        // ── Entity pre-filter (replaces the old tag pre-filter) ───────────────────
-        // Gate only when the query carried entities (explicit or graph-matched). Documents
-        // with no entities always pass; entitied documents pass if they touch a matched entity
-        // or their entity embedding is within threshold of the query's entity embedding.
-        if !matchedEntityIds.isEmpty || queryEntityEmbedding != nil {
-            let entitiedIndices = indices.filter { !$0.value.entityIds.isEmpty }
-            if !entitiedIndices.isEmpty {
-                var passing = Set<DocumentID>()
-                for (docId, idx) in entitiedIndices {
-                    if !Set(idx.entityIds).isDisjoint(with: matchedEntityIds) {
-                        passing.insert(docId); continue
-                    }
-                    guard let queryEntityEmbedding,
-                          let dist = idx.entityDistance(queryEmbedding: queryEntityEmbedding) else {
-                        continue
-                    }
-                    let threshold = sinatra.inferEntityThreshold(
-                        documentId: docId, owner: ownerKey,
-                        registry: sinatraRegistry, documentStats: registry.documentStats
-                    )
-                    if dist < threshold { passing.insert(docId) }
-                }
-                let unentitied = Set(indices.filter { $0.value.entityIds.isEmpty }.map { $0.key })
-                candidateIds = candidateIds.intersection(passing.union(unentitied))
-            }
+        if let graph, !matchedRelationshipIds.isEmpty {
+            candidateIds.formIntersection(graph.documents(linkedToRelationships: matchedRelationshipIds))
+        } else if !matchedEntityIds.isEmpty {
+            let entityDocuments = Set(indices.compactMap { docId, index in
+                Set(index.entityIds).isDisjoint(with: matchedEntityIds) ? nil : docId
+            })
+            candidateIds.formIntersection(entityDocuments)
         }
 
-        // ── Direct ADC scan ───────────────────────────────────────────────────────
         let directResults = scan(candidateIds, embedding: embedding, k: k, sinatra: sinatra,
                                  sinatraRegistry: sinatraRegistry, registry: registry,
                                  request: request, metadataLoader: metadataLoader, logger: logger)
@@ -159,21 +127,26 @@ struct PartitionTable: Codable {
             if let adjustment { adjustments.append(adjustment) }
         }
 
-        // ── One-hop graph expansion ─────────────────────────────────────────────────
-        var trace: GraphSearchTrace? = matchedEntityIds.isEmpty ? nil
-            : GraphSearchTrace(matchedEntityIds: Array(matchedEntityIds))
+        var trace: GraphSearchTrace? = (matchedEntityIds.isEmpty && matchedRelationshipIds.isEmpty)
+            ? nil
+            : GraphSearchTrace(
+                matchedEntityIds: Array(matchedEntityIds),
+                matchedRelationshipIds: Array(matchedRelationshipIds),
+                matchedPredicateIds: Array(matchedPredicateIds)
+            )
         if expand, let graph, !graph.entities.isEmpty {
             let resultDocs = Set(aggregated.flatMap { $0.partitions.map { $0.documentId } })
-            var seedEntities = matchedEntityIds
+            var seedEntities = matchedEntityIds.union(graph.endpointIds(for: matchedRelationshipIds))
             for docId in resultDocs {
                 if let idx = index(for: docId) { seedEntities.formUnion(idx.entityIds) }
             }
             if !seedEntities.isEmpty {
                 let (nbrEntities, nbrEdges) = graph.neighborhood(of: seedEntities, hops: 1)
-                let accessible = registry.availableDocumentIds.union(
+                var accessible = registry.availableDocumentIds.union(
                     Set(registry.ownersDocuments[ownerKey] ?? [])
                 )
-                let neighborDocs = graph.documents(linkedTo: nbrEntities)
+                if let scopedIds { accessible.formIntersection(scopedIds) }
+                let neighborDocs = graph.documents(linkedToEntities: nbrEntities)
                     .subtracting(resultDocs)
                     .intersection(accessible)
                 // Rank neighbor docs by summed incident-edge weight, take up to 2*k.
@@ -199,6 +172,8 @@ struct PartitionTable: Codable {
                 }
                 trace = GraphSearchTrace(
                     matchedEntityIds: Array(matchedEntityIds),
+                    matchedRelationshipIds: Array(matchedRelationshipIds),
+                    matchedPredicateIds: Array(matchedPredicateIds),
                     expansionEdges: Array(nbrEdges),
                     expandedDocumentCount: expandedPartitions.count
                 )

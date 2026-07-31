@@ -13,37 +13,27 @@ import MLXAccelerate
 /// the chunking algorithm.
 ///
 /// **Memory layout**
-/// Only `pq` (codebooks), `slots` (lean PQ codes + IDs), `entityIds`, and
-/// `entityEmbedding` are held in memory and persisted in the table plist.
+/// Only `pq` (codebooks), `slots` (lean PQ codes + IDs), and `entityIds` are held in memory.
 /// Partition metadata lives in per-document files (`documents/{id}-parts`)
 /// and is loaded on demand at content-resolution time.
 struct PartitionIndex: Codable {
     var pq: PartitionQuantizer
     /// Lean records for PQ scoring — no content, no raw embedding.
     var slots: [PartitionSlot]
-    /// Graph entity IDs this document contributes provenance to (resolved at upsert).
     var entityIds: [EntityID]
-    /// Exact embedding of the joined entity names, stored for precise dot-product
-    /// distance at search time. Nil when the document has no entities.
-    var entityEmbedding: [Float]?
 
     var metadata: Data?
-
-    /// Cosine similarity floor for the entity pre-filter (generous — coarse pass, not a hard gate).
-    static let entitySimilarityThreshold: Float = 0.15
 
     init() {
         pq              = .init()
         slots           = []
         entityIds       = []
-        entityEmbedding = nil
     }
 
     enum CodingKeys: String, CodingKey {
         case pq
         case slots
         case entityIds       = "entity_ids"
-        case entityEmbedding = "entity_embedding"
         case metadata
     }
 
@@ -55,7 +45,6 @@ struct PartitionIndex: Codable {
     mutating func train(
         _ partitions: [Database.Partition],
         entityIds: [EntityID] = [],
-        entityEmbedding: [Float]? = nil,
         documentId: String,
         logger: TotemLogger
     ) {
@@ -77,7 +66,6 @@ struct PartitionIndex: Codable {
         })
 
         self.entityIds = entityIds
-        self.entityEmbedding = entityEmbedding
 
         logger.info(
             "Index Train",
@@ -85,18 +73,6 @@ struct PartitionIndex: Codable {
             service: .database,
             flow: .embed(documentId: documentId)
         )
-    }
-
-    // MARK: - Entity Distance
-
-    /// Exact dot-product distance between the query embedding and this document's entity embedding.
-    /// Returns nil when no entities were indexed for this document (caller should include the document).
-    func entityDistance(queryEmbedding: [Float]) -> Float? {
-        guard let stored = entityEmbedding,
-              stored.count == queryEmbedding.count else { return nil }
-        var dot: Float = 0
-        vDSP_dotpr(stored, 1, queryEmbedding, 1, &dot, vDSP_Length(stored.count))
-        return 1.0 - dot
     }
 
     // MARK: - Search

@@ -27,17 +27,17 @@ func registerSearchRoute(
     }
 }
 
-/// Resolves a search's graph trace (entity/relationship IDs) into display objects using the
-/// current graph snapshot. Returns nil when there is no trace or graph.
 func buildGraphBlock(from trace: GraphSearchTrace?, graph: GraphStore?) -> SearchResponseGraph? {
     guard let trace, let graph, !graph.entities.isEmpty else { return nil }
 
-    let entities: [SearchGraphEntity] = trace.matchedEntityIds.compactMap { id in
+    let relationshipIds = Set(trace.matchedRelationshipIds).union(trace.expansionEdges)
+    let entityIds = Set(trace.matchedEntityIds).union(graph.endpointIds(for: relationshipIds))
+    let entities: [SearchGraphEntity] = entityIds.compactMap { id in
         guard let e = graph.entities[id] else { return nil }
         return SearchGraphEntity(id: e.id, name: e.name, kind: e.kind)
     }
 
-    let relationships: [SearchGraphRelationship] = trace.expansionEdges.compactMap { rid in
+    let relationships: [SearchGraphRelationship] = relationshipIds.compactMap { rid in
         guard let rel = graph.relationships[rid],
               let subject = graph.entities[rel.subjectId]?.name,
               let object = graph.entities[rel.objectId]?.name else { return nil }

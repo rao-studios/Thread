@@ -4,7 +4,7 @@
 //
 //  Invariants for granular graph editing: delete, rename/merge/set-kind re-keying
 //  (no dangling relationship endpoints, weight merging on collision), and the
-//  extraction-policy passes (predicate aliases, co-mention, similarity edges).
+//  extraction-policy passes.
 //
 
 import XCTest
@@ -12,8 +12,8 @@ import XCTest
 
 final class Flow4_GraphMutationTests: XCTestCase {
 
-    private func ent(_ name: String, _ kind: String = "concept", _ emb: [Float]? = nil) -> Database.GraphPayload.EntityIn {
-        .init(name: name, kind: kind, embedding: emb)
+    private func ent(_ name: String, _ kind: String = "concept") -> Database.GraphPayload.EntityIn {
+        .init(name: name, kind: kind)
     }
 
     private func seeded() -> GraphStore {
@@ -211,36 +211,6 @@ final class Flow4_GraphMutationTests: XCTestCase {
         // Pairs: AB (explicit — skipped), AC, BC.
         XCTAssertEqual(auto.count, 2)
         XCTAssertTrue(auto.allSatisfy { $0.predicate == "auto:appears with" })
-    }
-
-    func test_policy_similarity_bridgesToExistingEntities() {
-        var existing = GraphStore()
-        _ = existing.upsert(
-            .init(entities: [ent("Machine Learning", "concept", VectorFixtures.unit(axis: 2))]),
-            documentId: "d1"
-        )
-
-        var rule = ExtractionPolicy.SimilarityRule()
-        rule.enabled = true
-        rule.cosineThreshold = 0.8
-
-        let payload = GraphEnrichment.addSimilarityEdges(
-            to: .init(entities: [ent("Deep Learning", "concept", VectorFixtures.unit(axis: 2))]),
-            rule: rule,
-            hubCap: nil,
-            existingGraph: existing
-        )
-        XCTAssertEqual(payload.relationships.count, 1, "identical embeddings must bridge")
-        XCTAssertEqual(payload.relationships.first?.predicate, "auto:related to")
-        XCTAssertEqual(payload.relationships.first?.object, "Machine Learning")
-
-        let far = GraphEnrichment.addSimilarityEdges(
-            to: .init(entities: [ent("Cooking", "concept", VectorFixtures.unit(axis: 9))]),
-            rule: rule,
-            hubCap: nil,
-            existingGraph: existing
-        )
-        XCTAssertTrue(far.relationships.isEmpty, "orthogonal embeddings must not bridge")
     }
 
     func test_policy_effectivePrompt_expandsPlaceholders() {

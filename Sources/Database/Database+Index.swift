@@ -13,18 +13,16 @@ extension Database {
     ///   - id: The DocumentID.
     ///   - partitions: The partitions related to the document.
     ///   - graph: The extracted entity/relationship payload for this document.
-    ///   - entityEmbedding: The document-level embedding of the entity names.
     ///   - request: The DatabaseRequest with owner information.
     func index(
         id: DocumentID,
         partitions: [Database.Partition],
         graph: Database.GraphPayload = .init(),
-        entityEmbedding: [Float]? = nil,
         metadata: Data? = nil,
         request: DatabaseRequest
     ) async {
         await tableMutator.put(id: id, partitions: partitions, graph: graph,
-                               entityEmbedding: entityEmbedding, metadata: metadata, request: request)
+                               metadata: metadata, request: request)
     }
 
     /// Deletes or unlinks every document owned by a user.

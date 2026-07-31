@@ -227,10 +227,10 @@ final class Flow5_BatchIndexingTests: XCTestCase {
         let mutator = TableMutator.test()
         mutator.seed(.init())
 
-        let items = (0..<5).map { i -> (id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, entityEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
+        let items = (0..<5).map { i -> (id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, metadata: Data?, request: DatabaseRequest) in
             let p = Database.Partition.test(id: "p\(i)", documentId: "doc\(i)",
                                         embedding: VectorFixtures.random(seed: UInt64(i + 200)))
-            return ("doc\(i)", [p], .init(), nil, nil, .test())
+            return ("doc\(i)", [p], .init(), nil, .test())
         }
         await mutator.putBatch(items: items)
 
@@ -244,14 +244,14 @@ final class Flow5_BatchIndexingTests: XCTestCase {
         mutator.seed(.init())
 
         // 3 documents × 2 partitions each = 6 total HNSW insertions
-        let items = (0..<3).map { i -> (id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, entityEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
+        let items = (0..<3).map { i -> (id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, metadata: Data?, request: DatabaseRequest) in
             let partitions = [
                 Database.Partition.test(id: "p\(i)a", documentId: "doc\(i)",
                                     embedding: VectorFixtures.random(seed: UInt64(i * 2 + 400))),
                 Database.Partition.test(id: "p\(i)b", documentId: "doc\(i)",
                                     embedding: VectorFixtures.random(seed: UInt64(i * 2 + 401))),
             ]
-            return ("doc\(i)", partitions, .init(), nil, nil, .test())
+            return ("doc\(i)", partitions, .init(), nil, .test())
         }
         await mutator.putBatch(items: items)
 
@@ -275,10 +275,10 @@ final class Flow5_BatchIndexingTests: XCTestCase {
         batchMutator.seed(.init())
         individualMutator.seed(.init())
 
-        let items = (0..<5).map { i -> (id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, entityEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
+        let items = (0..<5).map { i -> (id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, metadata: Data?, request: DatabaseRequest) in
             let p = Database.Partition.test(id: "p\(i)", documentId: "doc\(i)",
                                         embedding: VectorFixtures.random(seed: UInt64(i + 600)))
-            return ("doc\(i)", [p], .init(), nil, nil, DatabaseRequest.test())
+            return ("doc\(i)", [p], .init(), nil, DatabaseRequest.test())
         }
 
         await batchMutator.putBatch(items: items)
@@ -306,7 +306,7 @@ final class Flow5_BatchIndexingTests: XCTestCase {
 
         let p = Database.Partition.test(id: "p0", documentId: "doc0",
                                     embedding: VectorFixtures.random(seed: 999))
-        await mutator.putBatch(items: [("doc0", [p], .init(), nil, nil, .test())])
+        await mutator.putBatch(items: [("doc0", [p], .init(), nil, .test())])
 
         // snapshot must reflect the mutation synchronously — no disk round-trip needed
         XCTAssertTrue(mutator.snapshot?.keys.contains("doc0") ?? false,

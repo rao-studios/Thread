@@ -32,6 +32,7 @@ extension GraphStore {
             }
         }
         adjacency.removeValue(forKey: id)
+        rebuildIndexes()
         return MutationResult(survivingId: nil, affectedDocumentIds: entity.documentIds)
     }
 
@@ -40,6 +41,7 @@ extension GraphStore {
         guard let rel = relationships.removeValue(forKey: id) else { return }
         adjacency[rel.subjectId]?.remove(id)
         adjacency[rel.objectId]?.remove(id)
+        rebuildIndexes()
     }
 
     // MARK: - Rename / kind change / merge (all re-keys)
@@ -106,17 +108,10 @@ extension GraphStore {
             affectedDocs.formUnion(existing.documentIds)
             existing.documentIds.formUnion(old.documentIds)
             existing.mentionCount += old.mentionCount
-            if existing.embedding == nil { existing.embedding = old.embedding }
             entities[newId] = existing
         } else {
             entities[newId] = Entity(
-                id: newId, name: trimmedName, kind: kind,
-                // The embedding encodes "kind: name" — stale after a re-key.
-                // Cleared so the next enrichment pass re-embeds it; name-token
-                // matching keeps working meanwhile.
-                embedding: nil,
-                documentIds: old.documentIds,
-                mentionCount: old.mentionCount
+                id: newId, name: trimmedName, kind: kind, documentIds: old.documentIds, mentionCount: old.mentionCount
             )
         }
         entities.removeValue(forKey: oldId)
@@ -141,7 +136,7 @@ extension GraphStore {
             } else {
                 relationships[newRid] = Relationship(
                     id: newRid, subjectId: subjectId, predicate: rel.predicate,
-                    objectId: objectId, embedding: rel.embedding,
+                    objectId: objectId, embedding: nil,
                     documentIds: rel.documentIds, weight: rel.weight
                 )
             }
@@ -149,6 +144,7 @@ extension GraphStore {
             adjacency[objectId, default: []].insert(newRid)
         }
         adjacency.removeValue(forKey: oldId)
+        rebuildIndexes()
 
         return MutationResult(survivingId: newId, affectedDocumentIds: affectedDocs)
     }

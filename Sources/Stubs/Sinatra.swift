@@ -24,15 +24,6 @@ class Sinatra: @unchecked Sendable {
         .unadjusted(distance: inference.distance)
     }
 
-    func inferEntityThreshold(
-        documentId: DocumentID,
-        owner: TotemRegistry.Owner,
-        registry: SinatraRegistry?,
-        documentStats: [DocumentID: Database.DocumentStats]
-    ) -> Float {
-        1.0 - PartitionIndex.entitySimilarityThreshold
-    }
-
     // Parking data is used for Self-RLHF. Not featured in the Mini.
     func park(
         data: [(score: Float, partition: Database.Partition)],
@@ -40,10 +31,6 @@ class Sinatra: @unchecked Sendable {
         request: DatabaseRequest
     ) {}
 
-    func parkIndices(
-        data: [(documentId: DocumentID, entityDistance: Float?, wasIncluded: Bool)],
-        request: DatabaseRequest
-    ) {}
 }
 
 /// Empty stub — SinatraRegistry is passed to Sinatra methods but never inspected

@@ -19,7 +19,7 @@ final class TotemGraphServiceImpl: Totem_V1_TotemGraph.SimpleServiceProtocol, Se
     ) async throws -> Totem_V1_TotemGraphQueryResponse {
         let databaseReq = DatabaseRequest(ownerId: request.ownerID)
 
-        // Embed the free-text query for entity similarity matching (Totem embeds server-side).
+        // Totem embeds free-text graph queries server-side for relationship matching.
         var queryVector: [Float]?
         if !request.query.isEmpty {
             let (embeds, _) = try await embeddingProvider.run(

@@ -2,8 +2,9 @@ import Foundation
 
 extension Database {
     nonisolated func search(_ queryData: [EmbeddingData],
-                queryEntityEmbedding: [Float]? = nil,
                 matchedEntityIds: Set<EntityID> = [],
+                matchedRelationshipIds: Set<RelationshipID> = [],
+                matchedPredicateIds: Set<PredicateID> = [],
                 expand: Bool = true,
                 database: DatabaseRequest) -> SearchResult {
         guard let table = self.table else {
@@ -30,8 +31,9 @@ extension Database {
             }
             for embedding in compiled {
                 let result = table.search(embedding: embedding,
-                                          queryEntityEmbedding: queryEntityEmbedding,
                                           matchedEntityIds: matchedEntityIds,
+                                          matchedRelationshipIds: matchedRelationshipIds,
+                                          matchedPredicateIds: matchedPredicateIds,
                                           graph: graphStore,
                                           expand: expand,
                                           sinatra: sinatra,
@@ -58,44 +60,36 @@ extension Database {
             return SearchChatResult(context: [], adjustments: [], references: [])
         }
 
-        // Effective entity terms: explicit `entities`, falling back to the legacy `tags` alias.
         let requestEntities = request.entities ?? request.tags ?? []
-        let queryEmbedding: [EmbeddingData]
-        let queryEntityEmbedding: [Float]?
+        let queryEmbedding = try await embed([query], provider: embeddingModelProvider)
 
-        if requestEntities.isEmpty {
-            queryEmbedding = try await embed([query], provider: embeddingModelProvider)
-            queryEntityEmbedding = nil
-        } else {
-            let queryEntityString = requestEntities.sorted().joined(separator: " ")
-            let allQueryData = try await embed([query, queryEntityString], provider: embeddingModelProvider)
-            queryEmbedding = Array(allQueryData.prefix(1))
-            queryEntityEmbedding = allQueryData.dropFirst().first.flatMap {
-                if case .floats(let v) = $0.embedding { return v }
-                return nil
-            }
-        }
-
-        // Match query entities against the graph: exact name-token hits plus embedding
-        // similarity over the query's content vector.
         let matchedEntityIds: Set<EntityID>
+        let matchedRelationshipIds: Set<RelationshipID>
+        let matchedPredicateIds: Set<PredicateID>
         if let graph = self.graph, !graph.entities.isEmpty {
             let queryVector: [Float]? = queryEmbedding.first.flatMap {
                 if case .floats(let v) = $0.embedding { return v }
                 return nil
             }
-            matchedEntityIds = Set(
-                graph.matchEntities(nameQuery: query, embedding: queryVector).map { $0.entity.id }
-            )
+            let entityQuery = ([query] + requestEntities).joined(separator: " ")
+            matchedEntityIds = Set(graph.matchEntities(nameQuery: entityQuery).map { $0.entity.id })
+            let relationships = queryVector.map {
+                graph.matchRelationships(embedding: $0, seededBy: matchedEntityIds)
+            } ?? []
+            matchedRelationshipIds = Set(relationships.map { $0.relationship.id })
+            matchedPredicateIds = Set(relationships.map { $0.predicateId })
         } else {
             matchedEntityIds = []
+            matchedRelationshipIds = []
+            matchedPredicateIds = []
         }
 
         let result = await withCheckedContinuation { (continuation: CheckedContinuation<SearchResult, Never>) in
             DispatchQueue.global(qos: .userInitiated).async { [self] in
                 let r = self.search(queryEmbedding,
-                                    queryEntityEmbedding: queryEntityEmbedding,
                                     matchedEntityIds: matchedEntityIds,
+                                    matchedRelationshipIds: matchedRelationshipIds,
+                                    matchedPredicateIds: matchedPredicateIds,
                                     expand: expand,
                                     database: request)
                 continuation.resume(returning: r)

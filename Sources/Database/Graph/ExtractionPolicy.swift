@@ -4,7 +4,7 @@
 //
 //  Editable policy governing in-flight entity/edge creation at ingest:
 //  custom ontology + extraction prompt, predicate normalization, caps, and
-//  auto-edge rules (co-mention, embedding similarity) with hub suppression.
+//  auto-edge rules with hub suppression.
 //
 //  The policy is global, persisted as a plist, and editable at runtime via
 //  GET/PUT /v1/graph/policy. Changes are prospective — already-ingested
@@ -35,23 +35,6 @@ struct ExtractionPolicy: Codable, Sendable, Equatable {
         var skipExplicitlyLinked: Bool = true
     }
 
-    /// New entities whose "kind: name" embeddings sit close to existing entities
-    /// spawn `auto:related to` edges — cross-document semantic bridges the
-    /// one-hop expansion can walk even without shared provenance.
-    struct SimilarityRule: Codable, Sendable, Equatable {
-        var enabled: Bool = true
-        var cosineThreshold: Float = 0.82
-        var maxEdgesPerEntity: Int = 3
-        var predicate: String = "related to"
-
-        enum CodingKeys: String, CodingKey {
-            case enabled
-            case cosineThreshold = "cosine_threshold"
-            case maxEdgesPerEntity = "max_edges_per_entity"
-            case predicate
-        }
-    }
-
     /// Ontology: the entity kinds the extractor may assign, with descriptions
     /// that are expanded into the prompt.
     var kinds: [KindDef] = ExtractionPolicy.defaultKinds
@@ -63,7 +46,6 @@ struct ExtractionPolicy: Codable, Sendable, Equatable {
     var maxEntities: Int = 12
     var maxRelationships: Int = 15
     var coMention: CoMentionRule? = CoMentionRule(enabled: false)
-    var similarity: SimilarityRule? = SimilarityRule(enabled: false)
     /// Entities at/over this graph degree receive no new auto-edges (megahub guard).
     var hubDegreeCap: Int? = 24
 
@@ -74,7 +56,6 @@ struct ExtractionPolicy: Codable, Sendable, Equatable {
         case maxEntities = "max_entities"
         case maxRelationships = "max_relationships"
         case coMention = "co_mention"
-        case similarity
         case hubDegreeCap = "hub_degree_cap"
     }
 

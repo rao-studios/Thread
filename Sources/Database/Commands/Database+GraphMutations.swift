@@ -33,11 +33,6 @@ extension Database {
         await tableMutator.mutateGraph(.setEntityKind(id, kind: kind))
     }
 
-    /// Re-runs extraction for one document under the current `ExtractionPolicy`:
-    /// reads the stored partition texts, extracts + enriches (policy edges,
-    /// entity embeddings) via `GraphEnrichment`, then swaps the document's graph
-    /// contribution atomically. Returns the resolved entity count, or nil when
-    /// the document has no stored partitions.
     func reExtract(
         documentId: DocumentID,
         extractor: any GraphExtracting,
@@ -68,7 +63,6 @@ extension Database {
         await tableMutator.reapplyGraph(
             documentId: documentId,
             payload: result.graph,
-            entityEmbedding: result.entityEmbedding,
             request: request
         )
         return result.graph.entities.count

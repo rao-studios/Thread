@@ -13,7 +13,7 @@ func registerGraphRoute(
         // No entity/query → browse mode: graphQuery returns the whole graph
         // (kind-filtered, capped by mention count).
 
-        // Embed the free-text query for entity similarity matching.
+        // Embed the free-text query for relationship and predicate matching.
         var queryVector: [Float]?
         if let query = graphReq.query, !query.isEmpty {
             let embeds = try await StandaloneGeneration.runEmbedding(

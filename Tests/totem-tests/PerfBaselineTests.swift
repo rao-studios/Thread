@@ -125,7 +125,7 @@ final class PerfBaselineTests: XCTestCase {
         let partitionsPerDoc = 10
         let allEmbeddings = vectors(docCount * partitionsPerDoc, seedBase: 1_000)
 
-        let items = (0..<docCount).map { d -> (id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, entityEmbedding: [Float]?, metadata: Data?, request: DatabaseRequest) in
+        let items = (0..<docCount).map { d -> (id: DocumentID, partitions: [Database.Partition], graph: Database.GraphPayload, metadata: Data?, request: DatabaseRequest) in
             let parts = (0..<partitionsPerDoc).map { p in
                 Database.Partition.test(
                     id: "perf-p\(d)-\(p)",
@@ -133,7 +133,7 @@ final class PerfBaselineTests: XCTestCase {
                     embedding: allEmbeddings[d * partitionsPerDoc + p]
                 )
             }
-            return ("perf-doc\(d)", parts, .init(), nil, nil, .test())
+            return ("perf-doc\(d)", parts, .init(), nil, .test())
         }
 
         measure {

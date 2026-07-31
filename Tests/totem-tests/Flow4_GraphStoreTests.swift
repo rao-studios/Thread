@@ -10,8 +10,8 @@ import XCTest
 
 final class Flow4_GraphStoreTests: XCTestCase {
 
-    private func entity(_ name: String, _ kind: String = "concept", _ emb: [Float]? = nil) -> Database.GraphPayload.EntityIn {
-        .init(name: name, kind: kind, embedding: emb)
+    private func entity(_ name: String, _ kind: String = "concept") -> Database.GraphPayload.EntityIn {
+        .init(name: name, kind: kind)
     }
 
     // MARK: - Identity
@@ -122,32 +122,100 @@ final class Flow4_GraphStoreTests: XCTestCase {
         XCTAssertEqual(decoded.neighborhood(of: [aid], hops: 1).entities.count, 2)
     }
 
+    func test_legacyEntityVectorsDecodeAsPureEntityRecords() throws {
+        struct LegacyEntity: Codable {
+            let id: EntityID
+            var name: String
+            let kind: String
+            var embedding: [Float]?
+            var documentIds: Set<DocumentID>
+            var mentionCount: Int
+        }
+        struct LegacyGraph: Codable {
+            let entities: [EntityID: LegacyEntity]
+            let relationships: [RelationshipID: Relationship]
+        }
+
+        let subjectId = GraphStore.entityID(kind: "person", name: "Ada")
+        let objectId = GraphStore.entityID(kind: "work", name: "Analytical Engine")
+        let relationshipId = GraphStore.relationshipID(
+            subjectId: subjectId, predicate: "programmed", objectId: objectId
+        )
+        let legacy = LegacyGraph(
+            entities: [
+                subjectId: .init(id: subjectId, name: "Ada", kind: "person", embedding: VectorFixtures.unit(axis: 1), documentIds: ["d1"], mentionCount: 1),
+                objectId: .init(id: objectId, name: "Analytical Engine", kind: "work", embedding: VectorFixtures.unit(axis: 2), documentIds: ["d1"], mentionCount: 1),
+            ],
+            relationships: [
+                relationshipId: .init(id: relationshipId, subjectId: subjectId, predicate: "programmed", objectId: objectId, embedding: nil, documentIds: ["d1"], weight: 1)
+            ]
+        )
+
+        let decoded = try PropertyListDecoder().decode(GraphStore.self, from: PropertyListEncoder().encode(legacy))
+        XCTAssertEqual(decoded.entities[subjectId]?.name, "Ada")
+        XCTAssertEqual(decoded.predicates[GraphStore.predicateID("programmed")]?.relationshipCount, 1)
+        XCTAssertEqual(decoded.adjacency[subjectId], Set([relationshipId]))
+    }
+
     // MARK: - Match
 
     func test_matchEntities_byName() {
         var g = GraphStore()
         _ = g.upsert(.init(entities: [entity("Marie Curie", "person")]), documentId: "d1")
-        let hits = g.matchEntities(nameQuery: "curie", embedding: nil)
+        let hits = g.matchEntities(nameQuery: "curie")
         XCTAssertEqual(hits.count, 1)
         XCTAssertEqual(hits.first?.score, 1.0)
     }
 
-    func test_matchEntities_byEmbeddingThreshold() {
+    func test_matchRelationships_byRelationshipAndPredicateEmbedding() {
         var g = GraphStore()
-        let emb = VectorFixtures.unit(axis: 3)
-        _ = g.upsert(.init(entities: [entity("Radium", "concept", emb)]), documentId: "d1")
+        let relationshipEmbedding = VectorFixtures.unit(axis: 3)
+        let predicateEmbedding = VectorFixtures.unit(axis: 8)
+        _ = g.upsert(.init(
+            entities: [entity("Marie Curie", "person"), entity("Radium")],
+            relationships: [.init(
+                subject: "Marie Curie", predicate: "discovered", object: "Radium",
+                embedding: relationshipEmbedding, predicateEmbedding: predicateEmbedding
+            )]
+        ), documentId: "d1")
 
-        let close = g.matchEntities(nameQuery: nil, embedding: emb)
-        XCTAssertEqual(close.count, 1, "self dot = 1.0 ≥ threshold")
+        let direct = g.matchRelationships(embedding: relationshipEmbedding)
+        XCTAssertEqual(direct.count, 1)
+        XCTAssertEqual(direct.first?.relationship.predicate, "discovered")
 
-        let far = g.matchEntities(nameQuery: nil, embedding: VectorFixtures.unit(axis: 10))
-        XCTAssertTrue(far.isEmpty, "orthogonal dot = 0 < 0.15 threshold")
+        let predicate = g.matchRelationships(embedding: predicateEmbedding)
+        XCTAssertEqual(predicate.count, 1)
+        XCTAssertEqual(predicate.first?.predicateId, GraphStore.predicateID("discovered"))
+    }
+
+    func test_enrichmentEmbedsRelationshipsAndPredicates() async {
+        let item = Database.BatchPutItem(
+            id: "d1",
+            data: [],
+            texts: ["Ada programmed the Analytical Engine."],
+            graph: .init(
+                entities: [entity("Ada", "person"), entity("Analytical Engine", "work")],
+                relationships: [.init(subject: "Ada", predicate: "programmed", object: "Analytical Engine")]
+            )
+        )
+
+        let enriched = await GraphEnrichment.run(
+            items: [item], extractor: nil, embedder: MockEmbeddingProvider(), existingGraph: nil, logger: .test
+        )
+        let relation = enriched.first?.graph.relationships.first
+        XCTAssertNotNil(relation?.embedding)
+        XCTAssertNotNil(relation?.predicateEmbedding)
+
+        var graph = GraphStore()
+        _ = graph.upsert(enriched.first!.graph, documentId: "d1")
+        XCTAssertNotNil(graph.relationships.values.first?.embedding)
+        XCTAssertNotNil(graph.predicates[GraphStore.predicateID("programmed")]?.embedding)
     }
 
     func test_matchEntities_kindFilter() {
         var g = GraphStore()
         _ = g.upsert(.init(entities: [entity("Curie", "person"), entity("Curie", "place")]), documentId: "d1")
-        let hits = g.matchEntities(nameQuery: "curie", embedding: nil, kinds: ["person"])
+        let hits = g.matchEntities(nameQuery: "curie", kinds: ["person"])
         XCTAssertEqual(hits.count, 1)
         XCTAssertEqual(hits.first?.entity.kind, "person")
     }

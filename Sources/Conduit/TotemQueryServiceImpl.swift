@@ -42,55 +42,25 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
             scope: request.scope == "global" ? .global : .personal
         )
 
-        // Query + entity embeddings: cache first (repeat chat turns become
-        // zero-round-trip), then ONE batched Mistral call for whatever's
-        // left — the old path issued two sequential calls for entitied
-        // queries where the REST path always batched.
         var embedMs = 0
         var cacheHits = 0
         var queryFloats: [Float] = request.queryEmbedding.isEmpty ? [] : Array(request.queryEmbedding)
-        var entityEmbedding: [Float]? = request.queryEntityEmbedding.isEmpty ? nil :
-            Array(request.queryEntityEmbedding)
-        let entityString = request.entities.isEmpty ? "" :
-            request.entities.sorted().joined(separator: " ")
-
         var needsQuery = queryFloats.isEmpty && !request.queryText.isEmpty
-        var needsEntity = entityEmbedding == nil && !entityString.isEmpty
 
         if needsQuery, let cached = Self.queryEmbeddingCache.get(request.queryText) {
             queryFloats = cached
             needsQuery = false
             cacheHits += 1
         }
-        if needsEntity, let cached = Self.queryEmbeddingCache.get(entityString) {
-            entityEmbedding = cached
-            needsEntity = false
-            cacheHits += 1
-        }
-
-        if needsQuery || needsEntity {
-            var toEmbed: [String] = []
-            if needsQuery { toEmbed.append(request.queryText) }
-            if needsEntity { toEmbed.append(entityString) }
+        if needsQuery {
             let embedStart = Date()
             if let (embeds, _) = try? await embeddingProvider.run(
-                toEmbed, logger: database.baseLogger, priority: true
+                [request.queryText], logger: database.baseLogger, priority: true
             ) {
-                var cursor = 0
-                if needsQuery {
-                    if let entry = embeds.first(where: { $0.index == cursor }),
-                       case let .floats(v) = entry.embedding {
-                        queryFloats = v
-                        Self.queryEmbeddingCache.cache(request.queryText, vector: v)
-                    }
-                    cursor += 1
-                }
-                if needsEntity {
-                    if let entry = embeds.first(where: { $0.index == cursor }),
-                       case let .floats(v) = entry.embedding {
-                        entityEmbedding = v
-                        Self.queryEmbeddingCache.cache(entityString, vector: v)
-                    }
+                if let entry = embeds.first(where: { $0.index == 0 }),
+                   case let .floats(v) = entry.embedding {
+                    queryFloats = v
+                    Self.queryEmbeddingCache.cache(request.queryText, vector: v)
                 }
             }
             embedMs = Int(Date().timeIntervalSince(embedStart) * 1000)
@@ -104,26 +74,28 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
         // Table restore is synchronous within startup; gate the first query on it.
         await database.initializationTask.value
 
-        // Match query entities against the graph (name tokens + content-vector similarity).
         let matchedEntityIds: Set<EntityID>
+        let matchedRelationshipIds: Set<RelationshipID>
+        let matchedPredicateIds: Set<PredicateID>
         if let graph = database.graph, !graph.entities.isEmpty {
-            let nameQuery = request.queryText.isEmpty ? nil : request.queryText
-            matchedEntityIds = Set(
-                graph.matchEntities(nameQuery: nameQuery,
-                                    embedding: queryFloats.isEmpty ? nil : queryFloats)
-                    .map { $0.entity.id }
-            )
+            let entityQuery = ([request.queryText] + request.entities).joined(separator: " ")
+            matchedEntityIds = Set(graph.matchEntities(nameQuery: entityQuery).map { $0.entity.id })
+            let relationships = graph.matchRelationships(embedding: queryFloats, seededBy: matchedEntityIds)
+            matchedRelationshipIds = Set(relationships.map { $0.relationship.id })
+            matchedPredicateIds = Set(relationships.map { $0.predicateId })
         } else {
             matchedEntityIds = []
+            matchedRelationshipIds = []
+            matchedPredicateIds = []
         }
 
-        let capturedEntityEmbedding = entityEmbedding
         let result = await withCheckedContinuation { (cont: CheckedContinuation<Database.SearchResult, Never>) in
             DispatchQueue.global(qos: .userInitiated).async { [database, databaseReq, queryData] in
                 cont.resume(returning: database.search(
                     queryData,
-                    queryEntityEmbedding: capturedEntityEmbedding,
                     matchedEntityIds: matchedEntityIds,
+                    matchedRelationshipIds: matchedRelationshipIds,
+                    matchedPredicateIds: matchedPredicateIds,
                     database: databaseReq
                 ))
             }
@@ -195,19 +167,14 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
             }
             let graph = Database.GraphPayload(entities: resolvedEntities, relationships: relations)
 
-            // Embed partitions + one joined-entity-names string (the doc-level entity embedding).
-            var toEmbed = texts
-            toEmbed.append(resolvedEntities.map { $0.name }.joined(separator: " "))
             let (embeddings, _) = try await embeddingProvider.run(
-                toEmbed,
+                texts,
                 logger: database.baseLogger,
                 priority: false
             )
             let sorted = embeddings.sorted { $0.index < $1.index }
-            let partitionEmbeddings = Array(sorted.dropLast()).enumerated()
+            let partitionEmbeddings = Array(sorted).enumerated()
                 .map { EmbeddingData(embedding: $0.element.embedding, index: $0.offset) }
-            let entityEmbedding: [Float]?
-            if case .floats(let v) = sorted.last?.embedding { entityEmbedding = v } else { entityEmbedding = nil }
 
             let fullCID = item.documentID
             fullCIDs.append(fullCID)
@@ -217,7 +184,6 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
                 data: partitionEmbeddings,
                 texts: texts,
                 graph: graph,
-                entityEmbedding: entityEmbedding,
                 needsExtraction: needsExtraction,
                 mediaType: item.mediaType == "image" ? .image : .text,
                 update: nil,

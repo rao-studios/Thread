@@ -20,12 +20,7 @@ private struct LinkOnlyInput {
 private struct DocumentEmbed {
     let preparedInput: PreparedInput
     let toEmbed: [String]
-    /// Resolved entity names (caller-provided, or keyword fallback) — the string embedded as
-    /// the document-level entity embedding.
-    let entityNames: [String]
-    /// The resolved graph payload merged into the store at index time.
     let graph: Database.GraphPayload
-    /// True when entities were only keyword placeholders — LLM extraction should replace them.
     let needsExtraction: Bool
 }
 
@@ -213,13 +208,9 @@ func registerBatchEmbeddingsRoute(
                 let resolvedEntities: [Database.GraphPayload.EntityIn] = needsExtraction
                     ? TagGenerator.generate(from: item.texts).map { .init(name: $0, kind: "concept") }
                     : item.providedEntities
-                let entityNames = resolvedEntities.map { $0.name }
                 let payload = Database.GraphPayload(entities: resolvedEntities,
                                                     relationships: item.providedRelations)
-                var toEmbed = item.texts
-                toEmbed.append(entityNames.joined(separator: " "))
-                return DocumentEmbed(preparedInput: item, toEmbed: toEmbed,
-                                     entityNames: entityNames, graph: payload,
+                return DocumentEmbed(preparedInput: item, toEmbed: item.texts, graph: payload,
                                      needsExtraction: needsExtraction)
             }
 
@@ -247,17 +238,14 @@ func registerBatchEmbeddingsRoute(
                 let count = embedCounts[i]
                 let slice = sortedEmbeddings[offset ..< (offset + count)]
 
-                let partitionEmbeddings: [EmbeddingData] = Array(slice.dropLast()).enumerated()
+                let partitionEmbeddings: [EmbeddingData] = Array(slice).enumerated()
                     .map { EmbeddingData(embedding: $0.element.embedding, index: $0.offset) }
-                let entityEmbedding: [Float]?
-                if case .floats(let v) = slice.last?.embedding { entityEmbedding = v } else { entityEmbedding = nil }
 
                 batchItems.append(Database.BatchPutItem(
                     id: docEmbed.preparedInput.documentId,
                     data: partitionEmbeddings,
                     texts: docEmbed.preparedInput.texts,
                     graph: docEmbed.graph,
-                    entityEmbedding: entityEmbedding,
                     needsExtraction: docEmbed.needsExtraction,
                     mediaType: mediaType,
                     update: embeddingRequest.update,

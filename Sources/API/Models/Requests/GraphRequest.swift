@@ -1,12 +1,12 @@
 import Foundation
 
-/// A knowledge-graph query: resolve entities by name and/or embedding similarity, then traverse
+/// A knowledge-graph query: resolve entities by name and relationships by semantic similarity, then traverse
 /// up to `hops` edges. At least one of `entity` / `query` must be present.
 struct GraphRequest: Codable {
     let totem: DatabaseRequest
     /// Entity name lookup (token containment).
     let entity: String?
-    /// Free-text query embedded for entity similarity matching.
+    /// Free-text query embedded for relationship and predicate matching.
     let query: String?
     /// Restrict matches to these entity kinds.
     let kinds: [String]?

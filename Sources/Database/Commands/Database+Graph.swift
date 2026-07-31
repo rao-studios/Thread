@@ -8,16 +8,11 @@
 import Foundation
 
 extension Database {
-    /// A knowledge-graph query: resolve seed entities by name and/or embedding similarity,
-    /// then traverse up to `hops` edges. Shared by the REST route and the gRPC service.
     struct GraphQuery {
         var entity: String?
-        /// Pre-embedded free-text query vector (callers embed the raw query themselves).
         var queryVector: [Float]?
         var kinds: Set<String>?
-        /// Traversal depth, clamped to 0–3.
         var hops: Int = 1
-        /// Max seed entities matched.
         var limit: Int = 20
         var includeDocuments: Bool = true
     }
@@ -30,8 +25,6 @@ extension Database {
         var relationshipCount: Int = 0
     }
 
-    /// Runs a graph query against the current graph snapshot, access-filtered to the
-    /// requesting owner's documents plus publicly available ones.
     nonisolated func graphQuery(_ query: GraphQuery, request: DatabaseRequest) -> GraphQueryResult {
         guard let graph = self.graph, !graph.entities.isEmpty else { return GraphQueryResult() }
 
@@ -42,8 +35,6 @@ extension Database {
         let browsing = (query.entity?.isEmpty ?? true)
             && (query.queryVector?.isEmpty ?? true)
         if browsing {
-            // Browse mode — no seeds given: show the whole graph, kind-filtered
-            // and capped by mention count so dense graphs stay renderable.
             let filtered = graph.entities.values.filter { entity in
                 guard let kinds = query.kinds, !kinds.isEmpty else { return true }
                 return kinds.contains(entity.kind)
@@ -57,15 +48,18 @@ extension Database {
             }.map(\.id))
             scoreById = [:]
         } else {
-            let matches = graph.matchEntities(
-                nameQuery: query.entity, embedding: query.queryVector,
-                kinds: query.kinds, limit: query.limit
-            )
+            let matches = graph.matchEntities(nameQuery: query.entity, kinds: query.kinds, limit: query.limit)
             scoreById = Dictionary(matches.map { ($0.entity.id, $0.score) }, uniquingKeysWith: max)
-            let seeds = Set(matches.map { $0.entity.id })
+            let matchedRelationships = query.queryVector.map {
+                graph.matchRelationships(embedding: $0, seededBy: Set(matches.map { $0.entity.id }), limit: query.limit)
+            } ?? []
+            let relationshipIds = Set(matchedRelationships.map { $0.relationship.id })
+            let seeds = Set(matches.map { $0.entity.id }).union(graph.endpointIds(for: relationshipIds))
 
             let hops = min(max(query.hops, 0), 3)
-            (reachedEntities, reachedEdges) = graph.neighborhood(of: seeds, hops: hops)
+            let traversed = graph.neighborhood(of: seeds, hops: hops)
+            reachedEntities = traversed.entities
+            reachedEdges = traversed.relationships.union(relationshipIds)
         }
 
         // Access filter: owner docs + publicly available docs.
@@ -96,7 +90,7 @@ extension Database {
 
         var documents: [GraphResponseDocument] = []
         if query.includeDocuments {
-            let docIds = graph.documents(linkedTo: reachedEntities).intersection(accessible)
+            let docIds = graph.documents(linkedToEntities: reachedEntities).intersection(accessible)
             documents = docIds.sorted().map { id in
                 let doc = self.document(for: id)
                 return GraphResponseDocument(id: id, name: doc?.name, ownerId: doc?.ownerId)
