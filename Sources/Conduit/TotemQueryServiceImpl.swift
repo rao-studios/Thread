@@ -66,6 +66,29 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
             embedMs = Int(Date().timeIntervalSince(embedStart) * 1000)
         }
 
+        // The user utterance remains the primary relation vector. Bonnie can
+        // additionally send a few question-signature predicates (`contains`,
+        // `part of`, `supports`, …); embed them separately so a broad phrase
+        // such as "can you reword that" does not drown out the structural
+        // relationship that identifies the right project or application fact.
+        let predicateHint = Array(request.entities)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .sorted()
+            .joined(separator: ", ")
+        var predicateFloats: [Float] = []
+        if !predicateHint.isEmpty {
+            let embedStart = Date()
+            if let (embeds, _) = try? await embeddingProvider.run(
+                ["Relationship predicates: \(predicateHint)"],
+                logger: database.baseLogger, priority: true
+            ), let entry = embeds.first(where: { $0.index == 0 }),
+              case let .floats(vector) = entry.embedding {
+                predicateFloats = vector
+            }
+            embedMs += Int(Date().timeIntervalSince(embedStart) * 1000)
+        }
+
         let queryData = [EmbeddingData(
             embedding: .floats(queryFloats),
             index: 0
@@ -80,7 +103,11 @@ final class TotemQueryServiceImpl: Totem_V1_TotemQuery.SimpleServiceProtocol, Se
         if let graph = database.graph, !graph.entities.isEmpty {
             let entityQuery = ([request.queryText] + request.entities).joined(separator: " ")
             matchedEntityIds = Set(graph.matchEntities(nameQuery: entityQuery).map { $0.entity.id })
-            let relationships = graph.matchRelationships(embedding: queryFloats, seededBy: matchedEntityIds)
+            let primary = graph.matchRelationships(embedding: queryFloats, seededBy: matchedEntityIds)
+            let hinted = predicateFloats.isEmpty
+                ? []
+                : graph.matchRelationships(embedding: predicateFloats)
+            let relationships = primary + hinted
             matchedRelationshipIds = Set(relationships.map { $0.relationship.id })
             matchedPredicateIds = Set(relationships.map { $0.predicateId })
         } else {
