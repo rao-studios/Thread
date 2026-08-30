@@ -96,45 +96,91 @@ final class TotemLibraryServiceImpl: Totem_V1_TotemLibrary.SimpleServiceProtocol
         database.logger.info(nil, "documentsRequest — owner: \(request.ownerID) ids: \(request.documentIds.count)")
         var resp = Totem_V1_TotemDocumentsResponse()
         guard let registry = database.registry else { return resp }
-
         for documentId in request.documentIds {
-            guard registry.isOwnerLinked(documentId, ownerId: request.ownerID)
-                    || registry.availableDocumentIds.contains(documentId) else {
-                continue
+            if let content = assembleContent(
+                documentId: documentId, ownerID: request.ownerID, registry: registry)
+            {
+                resp.documents.append(content)
             }
-            // No parts file means nothing to return — content IS the parts.
-            guard let parts = database.partitionDatas(for: documentId), !parts.isEmpty else {
-                continue
-            }
-
-            var content = Totem_V1_TotemDocumentContent()
-            content.id = documentId
-            content.texts = parts.map(\.data)
-            content.mediaType = parts.first?.mediaType.rawValue ?? MediaType.text.rawValue
-
-            if let document = database.document(for: documentId) {
-                content.name = document.name ?? ""
-                content.ownerID = document.ownerId
-                content.createdAt = Int64(document.createdAt.timeIntervalSince1970)
-            } else {
-                content.ownerID = parts.first?.ownerId ?? ""
-            }
-
-            // Group: the caller's own placement wins; fall back to any group
-            // the document belongs to.
-            let groupId = registry.ownerDocumentGroup[request.ownerID]?[documentId]
-                ?? registry.documentGroups[documentId]?.sorted().first
-            if let groupId {
-                content.groupID = groupId
-                if let groupOwner = registry.groupOwners[groupId],
-                   let entry = registry.ownersGroups[groupOwner]?.first(where: { $0.id == groupId }) {
-                    content.groupLabel = entry.label
-                }
-            }
-
-            resp.documents.append(content)
         }
         return resp
+    }
+
+    func exportCorpus(
+        request: Totem_V1_TotemExportCorpusRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Totem_V1_TotemExportCorpusResponse {
+        database.logger.info(
+            nil,
+            "exportCorpus — owner: \(request.ownerID) groups: \(request.groupIds.count) prefix: \(request.documentIDPrefix)")
+        var resp = Totem_V1_TotemExportCorpusResponse()
+        guard let registry = database.registry else { return resp }
+
+        let wantedGroups: Set<String>? = request.groupIds.isEmpty ? nil : Set(request.groupIds)
+        var ids = Set<String>()
+        for entry in database.groupEntries(for: request.ownerID) {
+            if let wantedGroups, !wantedGroups.contains(entry.id) { continue }
+            for documentId in registry.groups[entry.id] ?? [] {
+                if !request.documentIDPrefix.isEmpty,
+                   !documentId.hasPrefix(request.documentIDPrefix)
+                {
+                    continue
+                }
+                ids.insert(documentId)
+            }
+        }
+        var sorted = ids.sorted()
+        if !request.afterID.isEmpty {
+            sorted = sorted.filter { $0 > request.afterID }
+        }
+        let limit = request.limit > 0 ? Int(request.limit) : sorted.count
+        let hasMore = sorted.count > limit
+        let page = Array(sorted.prefix(limit))
+        for documentId in page {
+            if let content = assembleContent(
+                documentId: documentId, ownerID: request.ownerID, registry: registry)
+            {
+                resp.documents.append(content)
+            }
+        }
+        resp.hasMore_p = hasMore
+        return resp
+    }
+
+    private func assembleContent(
+        documentId: String, ownerID: String, registry: TotemRegistry
+    ) -> Totem_V1_TotemDocumentContent? {
+        guard registry.isOwnerLinked(documentId, ownerId: ownerID)
+                || registry.availableDocumentIds.contains(documentId) else {
+            return nil
+        }
+        guard let parts = database.partitionDatas(for: documentId), !parts.isEmpty else {
+            return nil
+        }
+
+        var content = Totem_V1_TotemDocumentContent()
+        content.id = documentId
+        content.texts = parts.map(\.data)
+        content.mediaType = parts.first?.mediaType.rawValue ?? MediaType.text.rawValue
+
+        if let document = database.document(for: documentId) {
+            content.name = document.name ?? ""
+            content.ownerID = document.ownerId
+            content.createdAt = Int64(document.createdAt.timeIntervalSince1970)
+        } else {
+            content.ownerID = parts.first?.ownerId ?? ""
+        }
+
+        let groupId = registry.ownerDocumentGroup[ownerID]?[documentId]
+            ?? registry.documentGroups[documentId]?.sorted().first
+        if let groupId {
+            content.groupID = groupId
+            if let groupOwner = registry.groupOwners[groupId],
+               let entry = registry.ownersGroups[groupOwner]?.first(where: { $0.id == groupId }) {
+                content.groupLabel = entry.label
+            }
+        }
+        return content
     }
 }
 
