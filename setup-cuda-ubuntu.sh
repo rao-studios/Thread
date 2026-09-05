@@ -62,6 +62,21 @@ else
         /usr/local/cudnn-frontend
 fi
 
+# ── Frigate, as a sibling ────────────────────────────────────────────────────
+# Package.swift takes Frigate by path (../Frigate), because Frigate itself carries a
+# path dependency that a URL consumer cannot resolve. So the sibling has to exist here.
+# Frigate's own manifest keeps everything macOS-only (VisionAX, its xcframeworks) inside
+# `#if !os(Linux)`, which is why this box never needs ../VisionAX.
+
+FRIGATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/Frigate"
+if [[ -d "$FRIGATE_DIR/.git" ]]; then
+    echo "==> ../Frigate present, fast-forwarding..."
+    git -C "$FRIGATE_DIR" pull --ff-only || echo "    (could not fast-forward; leaving the checkout as it is)"
+else
+    echo "==> Cloning Frigate beside this checkout (../Frigate)..."
+    git clone --branch main https://github.com/rao-studios/Frigate.git "$FRIGATE_DIR"
+fi
+
 # ── Shell environment ────────────────────────────────────────────────────────
 
 PROFILE="$HOME/.bashrc"

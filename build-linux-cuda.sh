@@ -39,6 +39,19 @@ else
     export SPM_CUDA=0
 fi
 
+# Frigate is a path dependency (../Frigate); the setup script clones it beside us.
+if [[ ! -d "$(dirname "$0")/../Frigate" ]]; then
+    echo "ERROR: ../Frigate not found beside this checkout."
+    echo "Run ./setup-cuda-ubuntu.sh to clone it."
+    exit 1
+fi
+
+# PLAIN `swift build`, ON PURPOSE. Resolving on a Mac pins opencv-spm (reached through
+# Frigate → VisionAX, which is macOS-only) and the Linux graph has no such package. This
+# repository does not commit Package.resolved (.gitignore), so the two never meet — but
+# if that ever changes, an ordinary build drops the extra pin with a warning and rewrites
+# the file, while --disable-automatic-resolution or --force-resolved-versions would turn
+# that warning into a failure.
 swift build -c "$BUILD_CONFIG" --jobs 2
 
 echo ""

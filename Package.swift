@@ -10,8 +10,12 @@ var packageDependencies: [Package.Dependency] = [
     .package(url: "https://github.com/grpc/grpc-swift-nio-transport.git", from: "1.0.0"),
     .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "1.0.0"),
     .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
-    .package(url: "https://github.com/rao-studios/Frigate.git", branch: "main"),
-    // .package(path: "../Frigate"),
+    // A SIBLING PATH, NOT THE URL. Frigate carries a path dependency of its own
+    // (../VisionAX, macOS only), and SwiftPM refuses a package required by URL that
+    // depends on a local package. Every other consumer already takes Frigate this way;
+    // on the Linux box, setup-cuda-ubuntu.sh puts the sibling in place.
+    .package(path: "../Frigate"),
+    // .package(url: "https://github.com/rao-studios/Frigate.git", branch: "main"),
     .package(path: "../Conduit")
     // .package(url: "https://github.com/rao-studios/Conduit.git", branch: "main")
 ]
