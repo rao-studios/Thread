@@ -142,6 +142,7 @@ curl http://127.0.0.1:8080/health
 | `--host` | `127.0.0.1` | HTTP bind address |
 | `--port` | `8080` | HTTP port |
 | `--grpc-port` | `9090` | gRPC listen port (distributed mode) |
+| `--data-dir` | `~/Documents/thread-db` | Directory for on-disk state (env `THREAD_DATA_DIR`) |
 | `--mothership-host` | _(none)_ | Sewn host — omit for standalone mode |
 | `--mothership-grpc-port` | _(none)_ | Sewn gRPC port |
 | `--use-mlx` | `false` | Use on-device MLX embeddings |

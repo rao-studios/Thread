@@ -71,8 +71,11 @@ struct ThreadServer: AsyncParsableCommand {
     @ArgumentParser.Option(name: .long, help: "Fixed node UUID. Overrides any persisted node-id on disk.")
     var nodeId: String?
 
+    @ArgumentParser.Option(name: .long, help: "Directory for on-disk state (default ~/Documents/thread-db; env THREAD_DATA_DIR).")
+    var dataDir: String?
+
     enum CodingKeys: CodingKey {
-        case host, port, grpcPort, mothershipHost, mothershipGrpcPort, fleetHost, fleetGrpcPort, nodeId
+        case host, port, grpcPort, mothershipHost, mothershipGrpcPort, fleetHost, fleetGrpcPort, nodeId, dataDir
         case noGraphExtraction, graphBackend, graphMistralModel
         #if canImport(MLX)
         case useMLX, mlxModel, graphModel
@@ -84,6 +87,10 @@ struct ThreadServer: AsyncParsableCommand {
         // ── Load .env before anything reads ProcessInfo.environment ──────────────
         loadDotEnv()
 
+        // ── Storage root: --data-dir beats THREAD_DATA_DIR beats ~/Documents/thread-db
+        let dataRoot = FilePersistence.configure(
+            dataDirectory: dataDir ?? ProcessInfo.processInfo.environment["THREAD_DATA_DIR"])
+
         // ── Logging ──────────────────────────────────────────────────────────────
         LoggingSystem.bootstrap { label in
             var handler = StreamLogHandler.standardOutput(label: label)
@@ -92,6 +99,7 @@ struct ThreadServer: AsyncParsableCommand {
         }
         var logger = Logger(label: "thread")
         logger.logLevel = .debug
+        logger.info("Storage root: \(dataRoot.path)")
 
         // ── Core services ─────────────────────────────────────────────────────────
         let fixedNodeId = nodeId.flatMap { UUID(uuidString: $0) }

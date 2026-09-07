@@ -6,7 +6,7 @@ extension Database {
     ///
     /// Format: "{threadUUID}-{localHash}"
     ///
-    /// The Thread UUID comes from `nodeId` (loaded from `thread-db/node-id` at startup),
+    /// The Thread UUID comes from `nodeId` (loaded from `<data-dir>/node-id` at startup),
     /// ensuring CIDs are unique across all nodes in the network without coordination.
     nonisolated func threadCID(localId: String) -> String {
         "\(nodeId.uuidString)-\(localId)"

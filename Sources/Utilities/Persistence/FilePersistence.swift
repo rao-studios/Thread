@@ -42,7 +42,30 @@ final class FilePersistence : AnyPersistence, @unchecked Sendable {
         }
     }
     
+    /// Process-wide data root override, set once at startup from `--data-dir`
+    /// or `THREAD_DATA_DIR`. Nil means `~/Documents/thread-db`. Written once
+    /// before any persistence exists, then only read.
+    nonisolated(unsafe) private static var dataDirectoryOverride: URL?
+
+    /// Point every FilePersistence at `path` (tilde expanded, created with
+    /// intermediates). Nil or empty restores the default. Call before any
+    /// persistence is constructed — instances resolve the root in `init`.
+    @discardableResult
+    static func configure(dataDirectory path: String?) -> URL {
+        if let path, !path.isEmpty {
+            let expanded = (path as NSString).expandingTildeInPath
+            dataDirectoryOverride = URL(fileURLWithPath: expanded, isDirectory: true)
+        } else {
+            dataDirectoryOverride = nil
+        }
+        let root = getDefaultURL()
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    /// The data root: the configured override, else `~/Documents/thread-db`.
     static func getDefaultURL() -> URL {
+        if let override = dataDirectoryOverride { return override }
         let value = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return value.appendingPathComponent("thread-db")
     }

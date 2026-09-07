@@ -20,11 +20,11 @@ import Logging
 ///      the storage identity and the network identity are always the same value —
 ///      no coordination required between the persistence layer and the mesh overlay.
 ///
-/// The identity file lives at `thread-db/node-id`.
+/// The identity file lives at `<data-dir>/node-id` (default `~/Documents/thread-db`).
 struct NodeIdentity {
     let nodeId: UUID
 
-    /// Load (or create) the node identity from `thread-db/node-id`.
+    /// Load (or create) the node identity from `<data-dir>/node-id`.
     /// Synchronous — safe to call from a non-async context at server startup,
     /// before the cooperative thread pool is active.
     ///
@@ -50,7 +50,7 @@ struct NodeIdentity {
         }
         // First launch: generate a fresh UUID and persist it atomically.
         // NodeIdentity.load() is called before TableMutator.init() which normally
-        // creates the thread-db/ directory via FilePersistence.init(). Create it
+        // creates the data directory via FilePersistence.init(). Create it
         // explicitly here so the write doesn't fail silently on the very first run.
         let fresh = UUID()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

@@ -1,6 +1,6 @@
 # Persistence
 
-Thread persists all state as binary property-list snapshots under `thread-db/`. There is no WAL and no memory-mapped store — durability is debounced full-file saves with startup reconciliation sweeps.
+Thread persists all state as binary property-list snapshots under its data directory (`~/Documents/thread-db` by default; see Data Directory). There is no WAL and no memory-mapped store — durability is debounced full-file saves with startup reconciliation sweeps.
 
 ---
 
@@ -38,7 +38,7 @@ Thread persists all state as binary property-list snapshots under `thread-db/`. 
 
 ## Data Directory
 
-Snapshot files are created under the app documents directory (`FilePersistence.getDefaultURL()`). Do not delete or move these files while the server is running.
+Snapshot files, the knowledge graph, documents and `node-id` all live under one root, `FilePersistence.getDefaultURL()`: `~/Documents/thread-db` by default, or whatever `thread --data-dir <path>` / the `THREAD_DATA_DIR` environment variable names (the flag wins; tilde is expanded and the directory is created on startup). Mary launches Thread with `--data-dir ~/Documents/maryOS/thread-db`. Do not delete or move these files while the server is running.
 
 ---
 
