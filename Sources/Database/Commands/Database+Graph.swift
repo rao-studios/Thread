@@ -63,7 +63,7 @@ extension Database {
         }
 
         // Access filter: owner docs + publicly available docs.
-        let ownerKey = TotemRegistry.Owner(id: request.ownerId)
+        let ownerKey = ThreadRegistry.Owner(id: request.ownerId)
         let accessible: Set<DocumentID> = {
             guard let registry = self.registry else { return [] }
             return registry.availableDocumentIds.union(Set(registry.ownersDocuments[ownerKey] ?? []))

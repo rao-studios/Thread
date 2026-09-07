@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  seer:
+  thread:
     build:
       context: .
       dockerfile: Dockerfile
@@ -9,10 +9,10 @@ services:
       - .env
     ports:
       - "8080:8080"  # change left side to expose on different host port
-      - "9090:9090"  # gRPC port for Seer fan-out (search/index/remove)
+      - "9090:9090"  # gRPC port for Sewn fan-out (search/index/remove)
     restart: unless-stopped
     volumes:
-      - totem-volume-dev:/root/Documents/totem-db
+      - thread-volume-dev:/root/Documents/thread-db
     logging:
       driver: json-file
       options:
@@ -20,5 +20,5 @@ services:
         max-file: "5"
 
 volumes:
-  totem-volume-dev:
+  thread-volume-dev:
     external: true

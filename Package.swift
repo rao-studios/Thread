@@ -40,23 +40,23 @@ var targetDependencies: [Target.Dependency] = [
 let supportedPlatforms: [SupportedPlatform] = [.macOS(.v15)]
 
 let package = Package(
-  name: "totem",
+  name: "thread",
   platforms: supportedPlatforms,
   dependencies: packageDependencies,
   targets: [
     .executableTarget(
-      name: "totem",
+      name: "thread",
       dependencies: targetDependencies,
       path: "Sources"
     ),
     .testTarget(
-      name: "totem-tests",
+      name: "thread-tests",
       dependencies: [
-        "totem",
+        "thread",
         .product(name: "Conduit", package: "Conduit"),
         .product(name: "HummingbirdTesting", package: "hummingbird"),
       ],
-      path: "Tests/totem-tests"
+      path: "Tests/thread-tests"
     )
   ]
 )

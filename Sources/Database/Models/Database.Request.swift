@@ -53,7 +53,7 @@ struct DatabaseRequest: Codable {
         requestID = try c.decodeIfPresent(String.self,           forKey: .requestID)
     }
 
-    /// In Totem there is no auth middleware — ownerId comes directly from the body.
+    /// In Thread there is no auth middleware — ownerId comes directly from the body.
     /// Call this with the Hummingbird request context's id: `withRequestID(context.id)`
     func withRequestID(_ id: String) -> DatabaseRequest {
         return .init(

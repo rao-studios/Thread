@@ -12,7 +12,7 @@ extension Database {
     ///
     /// `DocumentStats` is decoupled from `Database.Document` so the core document model
     /// stays lean. Stats are keyed by the same `DocumentID` and stored in
-    /// `TotemRegistry.documentStats`, following the same registration, removal,
+    /// `ThreadRegistry.documentStats`, following the same registration, removal,
     /// and access flows as the document itself.
     ///
     /// Performance fields (`retrievalCount`, `sentimentSum`, `lastRetrieved`) were

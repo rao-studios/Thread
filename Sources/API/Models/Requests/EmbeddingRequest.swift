@@ -29,7 +29,7 @@ struct EmbeddingRequest: Codable {
     let batchSize: Int?
     let sanitize: Bool?
     let update: DatabaseUpdate?
-    let totem: DatabaseRequest
+    let thread: DatabaseRequest
     let tags: [String]?
     let mediaType: MediaType?
     let metadata: Data?
@@ -43,7 +43,7 @@ struct EmbeddingRequest: Codable {
         case batchSize = "batch_size"
         case sanitize
         case update
-        case totem
+        case thread
         case tags
         case mediaType = "media_type"
         case metadata
@@ -59,7 +59,7 @@ struct EmbeddingBatchRequest: Codable {
     let batchSize: Int?
     let sanitize: Bool?
     let update: DatabaseUpdate?
-    let totem: DatabaseRequest
+    let thread: DatabaseRequest
     /// Per-document entities; outer index aligns 1:1 with `inputs`.
     let entities: [[GraphEntityInput]]?
     /// Per-document relationships; outer index aligns 1:1 with `inputs`.
@@ -81,7 +81,7 @@ struct EmbeddingBatchRequest: Codable {
         case batchSize = "batch_size"
         case sanitize
         case update
-        case totem
+        case thread
         case entities
         case relationships
         case tags

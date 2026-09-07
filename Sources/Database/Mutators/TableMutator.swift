@@ -17,9 +17,9 @@ import Foundation
 /// shutdown save immediately.
 actor TableMutator {
     private let nodeId: UUID
-    private let cache:      TotemCache<PartitionTable>
-    private let graphCache: TotemCache<GraphStore>
-    private let logger: TotemLogger
+    private let cache:      ThreadCache<PartitionTable>
+    private let graphCache: ThreadCache<GraphStore>
+    private let logger: ThreadLogger
 
     // MARK: - Debounced disk saves
 
@@ -28,12 +28,12 @@ actor TableMutator {
 
     // MARK: - Init
 
-    init(nodeId: UUID, logger: TotemLogger) {
+    init(nodeId: UUID, logger: ThreadLogger) {
         self.nodeId = nodeId
-        self.cache = TotemCache(
+        self.cache = ThreadCache(
             persistence: FilePersistence(key: "table-\(nodeId)", kind: .basic, logger: logger.base)
         )
-        self.graphCache = TotemCache(
+        self.graphCache = ThreadCache(
             persistence: FilePersistence(key: "graph-\(nodeId)", kind: .basic, logger: logger.base)
         )
         self.logger = logger

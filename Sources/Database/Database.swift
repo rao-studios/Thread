@@ -4,7 +4,7 @@ import Logging
 struct DatabaseConfig {}
 
 actor Database {
-    internal let logger: TotemLogger
+    internal let logger: ThreadLogger
     internal let baseLogger: Logger
     nonisolated internal let sinatra: Sinatra
     internal let tableMutator: TableMutator
@@ -24,18 +24,18 @@ actor Database {
     private var isProcessing = false
 
     init(nodeId: UUID? = nil, config: DatabaseConfig = DatabaseConfig()) {
-        var baseLogger = Logger(label: "totem-logger")
+        var baseLogger = Logger(label: "thread-logger")
         baseLogger.logLevel = .debug
         self.baseLogger = baseLogger
-        self.logger = TotemLogger(baseLogger)
+        self.logger = ThreadLogger(baseLogger)
         self.sinatra = Sinatra(logger: baseLogger)
         self.documentCache = DocumentCache()
 
         let identity = NodeIdentity.load(override: nodeId, logger: baseLogger)
         self.nodeId = identity.nodeId
 
-        self.tableMutator = TableMutator(nodeId: identity.nodeId, logger: TotemLogger(baseLogger))
-        self.registryMutator = RegistryMutator(nodeId: identity.nodeId, logger: TotemLogger(baseLogger))
+        self.tableMutator = TableMutator(nodeId: identity.nodeId, logger: ThreadLogger(baseLogger))
+        self.registryMutator = RegistryMutator(nodeId: identity.nodeId, logger: ThreadLogger(baseLogger))
         self.initializationTask = Task { [self] in
             await self.startup()
         }

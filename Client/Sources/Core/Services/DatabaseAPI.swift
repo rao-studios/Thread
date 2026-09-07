@@ -2,15 +2,15 @@ import Foundation
 
 actor DatabaseAPI {
     let databaseBaseURL: String    // Database mothership — search, library
-    let totemBaseURL: String   // Totem node — embed
+    let threadBaseURL: String   // Thread node — embed
     let ownerId: String
     let groupId: String
     let groupLabel: String
     let bearerToken: String
 
-    init(databaseBaseURL: String, totemBaseURL: String, ownerId: String, groupId: String, groupLabel: String = "Demo", bearerToken: String = "") {
+    init(databaseBaseURL: String, threadBaseURL: String, ownerId: String, groupId: String, groupLabel: String = "Demo", bearerToken: String = "") {
         self.databaseBaseURL = databaseBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.totemBaseURL = totemBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.threadBaseURL = threadBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         self.ownerId = ownerId
         self.groupId = groupId
         self.groupLabel = groupLabel
@@ -29,10 +29,10 @@ actor DatabaseAPI {
         }
     }
 
-    // MARK: - Batch embeddings (Totem node)
+    // MARK: - Batch embeddings (Thread node)
 
     func embed(text: String, filename: String? = nil) async throws {
-        guard let url = URL(string: "\(totemBaseURL)/v1/batch/embeddings") else {
+        guard let url = URL(string: "\(threadBaseURL)/v1/batch/embeddings") else {
             throw APIError.invalidURL
         }
 
@@ -107,7 +107,7 @@ actor DatabaseAPI {
     // MARK: - Search (Database mothership)
 
     func search(query: String) async throws -> [SearchResult] {
-        guard let url = URL(string: "\(totemBaseURL)/v1/search") else {
+        guard let url = URL(string: "\(threadBaseURL)/v1/search") else {
             throw APIError.invalidURL
         }
 
@@ -142,7 +142,7 @@ actor DatabaseAPI {
                 partitionId: ref?.partitionId ?? "",
                 ownerId: ref?.ownerId ?? "",
                 distance: nil,
-                totemId: ref?.totemId,
+                threadId: ref?.threadId,
                 shardIndex: ref?.shardIndex
             )
         }
@@ -185,10 +185,10 @@ actor DatabaseAPI {
         }
     }
 
-    // MARK: - Library (Totem node — documents live where they were indexed)
+    // MARK: - Library (Thread node — documents live where they were indexed)
 
     func fetchLibrary() async throws -> [DatabaseDocument] {
-        guard let url = URL(string: "\(totemBaseURL)/v1/library") else {
+        guard let url = URL(string: "\(threadBaseURL)/v1/library") else {
             throw APIError.invalidURL
         }
 
@@ -264,13 +264,13 @@ actor DatabaseAPI {
             let id: String
             let partitionId: String
             let ownerId: String
-            let totemId: String?
+            let threadId: String?
             let shardIndex: Int?
             enum CodingKeys: String, CodingKey {
                 case id
                 case partitionId = "partition_id"
                 case ownerId     = "owner_id"
-                case totemId     = "totem_id"
+                case threadId     = "thread_id"
                 case shardIndex  = "shard_index"
             }
         }

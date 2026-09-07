@@ -1,18 +1,18 @@
-# Totem
+# Thread
 
 <p align="center">
   <a href="Demo/README.md">
-    <img src="README_Assets/1.png" alt="SeerDemo — Library and Search" width="720" />
+    <img src="README_Assets/1.png" alt="SewnDemo — Library and Search" width="720" />
   </a>
 </p>
 
-Totem is a distributed vector search node for [Seer](https://github.com/rao-studios/Seer). In standalone mode it exposes HTTP routes for direct use. In distributed mode it connects to a Seer mothership over gRPC, registers itself, and serves all search and index traffic through a persistent bidirectional session stream.
+Thread is a distributed vector search node for [Sewn](https://github.com/rao-studios/Seer). In standalone mode it exposes HTTP routes for direct use. In distributed mode it connects to a Sewn mothership over gRPC, registers itself, and serves all search and index traffic through a persistent bidirectional session stream.
 
-## Seer
+## Sewn
 
-[Seer](https://github.com/rao-studios/Seer) is the mothership server that coordinates a fleet of Totem nodes. It handles authentication (via Supabase), conversation and RAG pipelines, sentiment analysis (Sinatra), royalty tracking (Gita), and personalization (Marielle). When a user issues a search or index request through Seer, Seer fans the operation out to all registered Totem nodes in parallel and merges the results.
+[Sewn](https://github.com/rao-studios/Seer) is the mothership server that coordinates a fleet of Thread nodes. It handles authentication (via Supabase), conversation and RAG pipelines, sentiment analysis (Sinatra), royalty tracking (Gita), and personalization (Marielle). When a user issues a search or index request through Sewn, Sewn fans the operation out to all registered Thread nodes in parallel and merges the results.
 
-Totem owns no user sessions and no authentication — that is Seer's responsibility. Totem's sole job is fast, reliable vector storage and nearest-neighbor search.
+Thread owns no user sessions and no authentication — that is Sewn's responsibility. Thread's sole job is fast, reliable vector storage and nearest-neighbor search.
 
 ## Prerequisites
 
@@ -48,7 +48,7 @@ Build and run:
 
 ```bash
 swift build -c release
-.build/release/totem --host 127.0.0.1 --port 8080 --use-mlx
+.build/release/thread --host 127.0.0.1 --port 8080 --use-mlx
 ```
 
 ### Linux / Ubuntu 24.04 (NVIDIA GPU)
@@ -85,7 +85,7 @@ chmod +x build-linux-cuda.sh
 **Run:**
 
 ```bash
-.build/debug/totem --host 127.0.0.1 --port 8080 --use-mlx
+.build/debug/thread --host 127.0.0.1 --port 8080 --use-mlx
 ```
 
 The package is pinned to `riteshpakala/mlx-swift:gab/cuda1` which carries patches for CUDA 12.9 + GCC 13 half-precision math, CUTLASS-free sm_86 builds, SDPA cache sizing, and a GPU-only affine quantized matmul fallback. See [Docs/MLX-CUDA-Linux.md](Docs/MLX-CUDA-Linux.md) for the full patch log, fork commit hashes, and troubleshooting reference.
@@ -97,14 +97,14 @@ The package is pinned to `riteshpakala/mlx-swift:gab/cuda1` which carries patche
 ```bash
 swift build -c release
 
-# Standalone — HTTP only, no Seer required
-.build/release/totem --host 127.0.0.1 --port 8080
+# Standalone — HTTP only, no Sewn required
+.build/release/thread --host 127.0.0.1 --port 8080
 
 # On-device MLX (Apple Silicon)
-.build/release/totem --host 127.0.0.1 --port 8080 --use-mlx
+.build/release/thread --host 127.0.0.1 --port 8080 --use-mlx
 
-# Distributed — registers with a running Seer instance
-.build/release/totem \
+# Distributed — registers with a running Sewn instance
+.build/release/thread \
   --host 127.0.0.1 --port 8080 \
   --grpc-port 9090 \
   --mothership-host 127.0.0.1 \
@@ -117,10 +117,10 @@ swift build -c release
 ./build-linux-cuda.sh
 
 # Standalone with on-device GPU embeddings
-.build/debug/totem --host 127.0.0.1 --port 8080 --use-mlx
+.build/debug/thread --host 127.0.0.1 --port 8080 --use-mlx
 
 # Distributed
-.build/debug/totem \
+.build/debug/thread \
   --host 127.0.0.1 --port 8080 \
   --grpc-port 9090 \
   --mothership-host 127.0.0.1 \
@@ -142,8 +142,8 @@ curl http://127.0.0.1:8080/health
 | `--host` | `127.0.0.1` | HTTP bind address |
 | `--port` | `8080` | HTTP port |
 | `--grpc-port` | `9090` | gRPC listen port (distributed mode) |
-| `--mothership-host` | _(none)_ | Seer host — omit for standalone mode |
-| `--mothership-grpc-port` | _(none)_ | Seer gRPC port |
+| `--mothership-host` | _(none)_ | Sewn host — omit for standalone mode |
+| `--mothership-grpc-port` | _(none)_ | Sewn gRPC port |
 | `--use-mlx` | `false` | Use on-device MLX embeddings |
 | `--mlx-model` | `Qwen3-Embedding-0.6B-4bit-DWQ` | Hub model ID for MLX |
 | `--graph-model` | `Qwen3-1.7B-4bit` | Hub model ID for on-device graph extraction |
@@ -155,32 +155,32 @@ curl http://127.0.0.1:8080/health
 
 ```
 ┌───────────────────────────────────────────────────────┐
-│  Seer (Mothership)                                    │
+│  Sewn (Mothership)                                    │
 │  ┌──────────────┐  Fan-out: Search / Index /          │
-│  │ TotemQuery   │  Remove / Library / Graph ──────────┼──┐
+│  │ ThreadQuery   │  Remove / Library / Graph ──────────┼──┐
 │  │ Client       │                                     │  │
 │  └──────┬───────┘                                     │  │
 │         │  gRPC bidirectional Session stream          │  │
 └─────────┼─────────────────────────────────────────────┘  │
-          │  (Totem holds the connection)                  │
+          │  (Thread holds the connection)                  │
           ▼                                                │
 ┌───────────────────────────────────────────────────────┐  │
-│  Totem (this repo)                                    │  │
+│  Thread (this repo)                                    │  │
 │  MothershipRegistrationClient                         │  │
 │    1. register()         — sends host/grpc/httpPort   │  │
 │    2. session()          — bidirectional stream       │  │
-│       • pings Seer every 30 s                         │  │
+│       • pings Sewn every 30 s                         │  │
 │       • receives requests, dispatches via             │  │
 │         MothershipRequestDispatcher                   │  │
 │    3. updateAvailability() — signals storage capacity │  │
 │                                                       │  │
 │  gRPC Services (also reachable directly):             │◀─┘
-│    TotemQuery   — search / index / remove             │
-│    TotemLibrary — library (paginated groups)          │
-│    TotemGraph   — knowledge-graph queries             │
+│    ThreadQuery   — search / index / remove             │
+│    ThreadLibrary — library (paginated groups)          │
+│    ThreadGraph   — knowledge-graph queries             │
 │                                                       │
 │  Database (actor)                                     │
-│    RegistryMutator  ─▶ TotemRegistry                  │
+│    RegistryMutator  ─▶ ThreadRegistry                  │
 │    TableMutator     ─▶ PartitionTable + GraphStore    │
 │      PartitionIndex × M (per-document PQ)             │
 │        PartitionQuantizer (PQ codebooks, ADC)         │
@@ -192,9 +192,9 @@ curl http://127.0.0.1:8080/health
 
 When `--mothership-host` is provided, `MothershipRegistrationClient` starts a persistent loop:
 
-1. **`register` RPC** — Totem sends its UUID, HTTP host, gRPC port, and HTTP port. Seer records the node and returns an acceptance signal. Totem retries every 5 s until accepted.
-2. **`session` RPC** — Totem opens a bidirectional stream and holds it. Totem sends periodic pings every 30 s. Seer sends request payloads (search, index, remove, library, graph, update, stats) over the same stream. `MothershipRequestDispatcher` routes each message to the correct service impl and writes the response back with a matching `correlationID`.
-3. **`updateAvailability` RPC** — A one-shot call Totem makes when its storage capacity changes (e.g. after a large batch completes). Seer uses this to steer new index requests to nodes that are accepting storage.
+1. **`register` RPC** — Thread sends its UUID, HTTP host, gRPC port, and HTTP port. Sewn records the node and returns an acceptance signal. Thread retries every 5 s until accepted.
+2. **`session` RPC** — Thread opens a bidirectional stream and holds it. Thread sends periodic pings every 30 s. Sewn sends request payloads (search, index, remove, library, graph, update, stats) over the same stream. `MothershipRequestDispatcher` routes each message to the correct service impl and writes the response back with a matching `correlationID`.
+3. **`updateAvailability` RPC** — A one-shot call Thread makes when its storage capacity changes (e.g. after a large batch completes). Sewn uses this to steer new index requests to nodes that are accepting storage.
 
 If the session drops, `MothershipRegistrationClient` sleeps 5 s and reconnects automatically.
 
@@ -202,57 +202,57 @@ If the session drops, `MothershipRegistrationClient` sleeps 5 s and reconnects a
 
 ## gRPC Services
 
-All services run on `--grpc-port` (default 9090) and are also reachable via the Seer session stream.
+All services run on `--grpc-port` (default 9090) and are also reachable via the Sewn session stream.
 
-### TotemQuery
-
-| RPC | Request | Response | Description |
-|---|---|---|---|
-| `Search` | `TotemSearchRequest` | `TotemSearchResponse` | Hybrid KG + PQ search. Accepts raw `query_text` (Totem embeds it) or a precomputed `query_embedding`; optional `entities` gate the graph pre-filter. The response carries a `trace` describing entity matches and graph expansion. |
-| `Index` | `TotemIndexRequest` | `TotemIndexResponse` | Embed and index a batch of documents. Returns immediately; async write queue drains in the background. |
-| `Remove` | `TotemRemoveRequest` | `TotemRemoveResponse` | Remove specific document IDs, or all documents for an owner when `document_ids` is empty. |
-
-### TotemLibrary
+### ThreadQuery
 
 | RPC | Request | Response | Description |
 |---|---|---|---|
-| `Library` | `TotemLibraryRequest` | `TotemLibraryResponse` | Paginated list of groups for an owner. `after_id` is a cursor; `limit` controls page size. |
+| `Search` | `ThreadSearchRequest` | `ThreadSearchResponse` | Hybrid KG + PQ search. Accepts raw `query_text` (Thread embeds it) or a precomputed `query_embedding`; optional `entities` gate the graph pre-filter. The response carries a `trace` describing entity matches and graph expansion. |
+| `Index` | `ThreadIndexRequest` | `ThreadIndexResponse` | Embed and index a batch of documents. Returns immediately; async write queue drains in the background. |
+| `Remove` | `ThreadRemoveRequest` | `ThreadRemoveResponse` | Remove specific document IDs, or all documents for an owner when `document_ids` is empty. |
 
-### TotemGraph
+### ThreadLibrary
 
 | RPC | Request | Response | Description |
 |---|---|---|---|
-| `Query` | `TotemGraphQueryRequest` | `TotemGraphQueryResponse` | Resolve seed entities by name and/or free-text similarity (Totem embeds `query`), traverse up to `hops` edges (0–3), and return entities, relationships, linked documents, and graph stats. |
+| `Library` | `ThreadLibraryRequest` | `ThreadLibraryResponse` | Paginated list of groups for an owner. `after_id` is a cursor; `limit` controls page size. |
+
+### ThreadGraph
+
+| RPC | Request | Response | Description |
+|---|---|---|---|
+| `Query` | `ThreadGraphQueryRequest` | `ThreadGraphQueryResponse` | Resolve seed entities by name and/or free-text similarity (Thread embeds `query`), traverse up to `hops` edges (0–3), and return entities, relationships, linked documents, and graph stats. |
 
 ### Session message envelope
 
-Every payload traveling over the `Session` stream is wrapped in `TotemSessionMessage`:
+Every payload traveling over the `Session` stream is wrapped in `ThreadSessionMessage`:
 
 ```protobuf
-message TotemSessionMessage {
+message ThreadSessionMessage {
   string correlation_id = 1;   // ties each request to its response
-  string totem_id       = 2;   // set by Totem so Seer can identify the stream
+  string thread_id       = 2;   // set by Thread so Sewn can identify the stream
 
   oneof payload {
-    TotemSessionPing            ping                     = 3;
-    TotemSessionPong            pong                     = 4;
-    TotemSearchRequest          search_request           = 5;
-    TotemSearchResponse         search_response          = 6;
-    TotemIndexRequest           index_request            = 7;
-    TotemIndexResponse          index_response           = 8;
-    TotemRemoveRequest          remove_request           = 9;
-    TotemRemoveResponse         remove_response          = 10;
-    TotemLibraryRequest         library_request          = 11;
-    TotemLibraryResponse        library_response         = 12;
-    // 13–22 reserved (retired TotemHNSW arms)
-    TotemUpdateGroupRequest     update_group_request     = 23;
-    TotemUpdateGroupResponse    update_group_response    = 24;
-    TotemUpdateDocumentRequest  update_document_request  = 25;
-    TotemUpdateDocumentResponse update_document_response = 26;
-    TotemStatsRequest           stats_request            = 27;
-    TotemStatsResponse          stats_response           = 28;
-    TotemGraphQueryRequest      graph_request            = 29;
-    TotemGraphQueryResponse     graph_response           = 30;
+    ThreadSessionPing            ping                     = 3;
+    ThreadSessionPong            pong                     = 4;
+    ThreadSearchRequest          search_request           = 5;
+    ThreadSearchResponse         search_response          = 6;
+    ThreadIndexRequest           index_request            = 7;
+    ThreadIndexResponse          index_response           = 8;
+    ThreadRemoveRequest          remove_request           = 9;
+    ThreadRemoveResponse         remove_response          = 10;
+    ThreadLibraryRequest         library_request          = 11;
+    ThreadLibraryResponse        library_response         = 12;
+    // 13–22 reserved (retired ThreadHNSW arms)
+    ThreadUpdateGroupRequest     update_group_request     = 23;
+    ThreadUpdateGroupResponse    update_group_response    = 24;
+    ThreadUpdateDocumentRequest  update_document_request  = 25;
+    ThreadUpdateDocumentResponse update_document_response = 26;
+    ThreadStatsRequest           stats_request            = 27;
+    ThreadStatsResponse          stats_response           = 28;
+    ThreadGraphQueryRequest      graph_request            = 29;
+    ThreadGraphQueryResponse     graph_response           = 30;
   }
 }
 ```
@@ -265,7 +265,7 @@ message TotemSessionMessage {
 
 ### Registry
 
-The `TotemRegistry` is the ownership and access-control layer. Every document must be registered to an owner before it can be searched.
+The `ThreadRegistry` is the ownership and access-control layer. Every document must be registered to an owner before it can be searched.
 
 | Concept | What it is |
 |---|---|
@@ -312,7 +312,7 @@ Embeddings are compressed at index time via `PartitionQuantizer`. Each 1024-floa
 
 Codebook size scales dynamically with the training corpus (`scaledCodebookSize`): a document with 3 partitions uses k=2; a large shared index may grow to k=2048 or higher. An `adaptiveThreshold` is calibrated per-document from reconstruction errors during training and overrides the static per-codec fallback at search time.
 
-If all partitions in a batch fail embedding (e.g. empty text), Totem skips index creation for that document and logs a warning rather than crashing.
+If all partitions in a batch fail embedding (e.g. empty text), Thread skips index creation for that document and logs a warning rather than crashing.
 
 ### Persistence
 
@@ -352,7 +352,7 @@ Indexes one or more documents. Each document's text is embedded and PQ-compresse
     ["array", "of", "strings"]
   ],
   "sanitize": true,
-  "seer": {
+  "sewn": {
     "owner_id": "alice",
     "group": {
       "id": "my-group",
@@ -372,8 +372,8 @@ Indexes one or more documents. Each document's text is embedded and PQ-compresse
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `inputs` | `[String \| [String]]` | Yes | One entry per document. String or array of strings. |
-| `seer.owner_id` | String | Yes | Identity of the caller. Lowercased on receipt. |
-| `seer.group` | Group | No | Assigns all documents in this batch to a named group. |
+| `sewn.owner_id` | String | Yes | Identity of the caller. Lowercased on receipt. |
+| `sewn.group` | Group | No | Assigns all documents in this batch to a named group. |
 | `sanitize` | Bool | No | When `true`, passes each input through `TextChunker` before embedding. Default: `false`. |
 | `tags` | `[[String]]` | No | Per-document tag hints. Outer index aligns 1:1 with `inputs`. Auto-generated if empty. |
 | `media_type` | String | No | `"text"` (default) or `"image"`. |
@@ -401,7 +401,7 @@ Searches indexed documents for the closest matching partitions to a query string
 ```json
 {
   "query": "how does product quantization work?",
-  "seer": {
+  "sewn": {
     "owner_id": "alice",
     "group": { "id": "my-group", "label": "...", "owner_id": "alice", "documents": [] },
     "scope": "personal",
@@ -413,12 +413,12 @@ Searches indexed documents for the closest matching partitions to a query string
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `query` | String | Yes | Natural language query. Embedded at search time. |
-| `seer.owner_id` | String | Yes | Scopes the search to this owner's documents by default. |
-| `seer.scope` | `"personal" \| "global"` | No | `personal` (default): only the owner's documents. `global`: all `.available` documents. |
-| `seer.aggregate` | Bool | No | When `true`, also searches groups the owner has access to. |
-| `seer.group` | Group | No | Restricts search to a specific group. |
-| `seer.groups` | [Group] | No | Restricts search to a list of groups. |
-| `seer.tags` | [String] | No | Tag filter: only documents whose tag embedding is within threshold are considered. |
+| `sewn.owner_id` | String | Yes | Scopes the search to this owner's documents by default. |
+| `sewn.scope` | `"personal" \| "global"` | No | `personal` (default): only the owner's documents. `global`: all `.available` documents. |
+| `sewn.aggregate` | Bool | No | When `true`, also searches groups the owner has access to. |
+| `sewn.group` | Group | No | Restricts search to a specific group. |
+| `sewn.groups` | [Group] | No | Restricts search to a list of groups. |
+| `sewn.tags` | [String] | No | Tag filter: only documents whose tag embedding is within threshold are considered. |
 
 **Response**
 
@@ -448,7 +448,7 @@ curl -X POST http://127.0.0.1:8080/v1/batch/embeddings \
       "Swift actors serialize concurrent access by routing all calls through a single executor.",
       "Product quantization compresses high-dimensional vectors into compact integer codes."
     ],
-    "seer": {
+    "sewn": {
       "owner_id": "alice",
       "group": {
         "id": "swift-docs",
@@ -467,7 +467,7 @@ curl -X POST http://127.0.0.1:8080/v1/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "how do actors work in Swift?",
-    "seer": {
+    "sewn": {
       "owner_id": "alice",
       "scope": "personal"
     }
@@ -498,7 +498,7 @@ Another owner can then find it with `"scope": "global"`.
 - **Persistence.** The table, graph, and registry are persisted as plist snapshots under the data directory. Do not delete these while the server is running.
 - **Deduplication.** Document IDs are SHA-256 hashes of their content. Submitting the same text twice under a different owner links the second owner to the existing vectors — no re-embedding occurs.
 - **Tag auto-generation.** If no `tags` are supplied, `TagGenerator` derives frequency-weighted keywords from the text. These are embedded separately and used as a pre-filter during search.
-- **Distributed mode.** In distributed mode all fan-out goes through the gRPC session stream. The HTTP routes remain available for direct use and debugging. Multiple Totem nodes can run simultaneously; Seer fans search queries to all active nodes in parallel and merges results.
+- **Distributed mode.** In distributed mode all fan-out goes through the gRPC session stream. The HTTP routes remain available for direct use and debugging. Multiple Thread nodes can run simultaneously; Sewn fans search queries to all active nodes in parallel and merges results.
 
 ---
 

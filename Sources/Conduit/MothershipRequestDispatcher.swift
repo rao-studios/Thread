@@ -6,24 +6,24 @@ import Logging
 // SessionRequestHandling lets Conduit's MothershipRegistrationClient route
 // incoming session requests here; handle(_:) below is the witness.
 final class MothershipRequestDispatcher: SessionRequestHandling, Sendable {
-    private let queryImpl: TotemQueryServiceImpl
-    private let libraryImpl: TotemLibraryServiceImpl
-    private let graphImpl: TotemGraphServiceImpl
-    private let updateImpl: TotemUpdateServiceImpl
+    private let queryImpl: ThreadQueryServiceImpl
+    private let libraryImpl: ThreadLibraryServiceImpl
+    private let graphImpl: ThreadGraphServiceImpl
+    private let updateImpl: ThreadUpdateServiceImpl
     private let logger: Logger
 
     init(database: Database, embeddingProvider: any EmbeddingProviding,
          graphExtractor: any GraphExtracting, logger: Logger) {
-        queryImpl   = TotemQueryServiceImpl(database: database, embeddingProvider: embeddingProvider,
+        queryImpl   = ThreadQueryServiceImpl(database: database, embeddingProvider: embeddingProvider,
                                             graphExtractor: graphExtractor)
-        libraryImpl = TotemLibraryServiceImpl(database: database)
-        graphImpl   = TotemGraphServiceImpl(database: database, embeddingProvider: embeddingProvider)
-        updateImpl  = TotemUpdateServiceImpl(database: database)
+        libraryImpl = ThreadLibraryServiceImpl(database: database)
+        graphImpl   = ThreadGraphServiceImpl(database: database, embeddingProvider: embeddingProvider)
+        updateImpl  = ThreadUpdateServiceImpl(database: database)
         self.logger = logger
     }
 
-    func handle(_ msg: Totem_V1_TotemSessionMessage) async -> Totem_V1_TotemSessionMessage? {
-        var response = Totem_V1_TotemSessionMessage()
+    func handle(_ msg: Thread_V1_ThreadSessionMessage) async -> Thread_V1_ThreadSessionMessage? {
+        var response = Thread_V1_ThreadSessionMessage()
         response.correlationID = msg.correlationID
 
         // Dummy context — none of the service impls use ServerContext fields.
@@ -53,20 +53,20 @@ final class MothershipRequestDispatcher: SessionRequestHandling, Sendable {
                 logger.info("MothershipRequestDispatcher: [\(tag)] indexRequest — done, indexed \(r.indexedCount)")
                 response.payload = .indexResponse(r)
             } catch EmbeddingBackpressureError.normalWaiterQueueFull {
-                // Embedding queue is saturated — signal backpressure to Seer so it can
-                // retry. Always return a response so Seer's continuation resolves and
+                // Embedding queue is saturated — signal backpressure to Sewn so it can
+                // retry. Always return a response so Sewn's continuation resolves and
                 // the drain loop does not freeze.
                 logger.warning("MothershipRequestDispatcher: [\(tag)] indexRequest — embedding queue full, signalling backpressure")
-                var failResp = Totem_V1_TotemIndexResponse()
+                var failResp = Thread_V1_ThreadIndexResponse()
                 failResp.success = false
                 failResp.indexedCount = 0
                 response.payload = .indexResponse(failResp)
             } catch {
-                // Unexpected error — still return a failure response so Seer's
-                // continuation always resolves. Returning nil would leave Seer's
+                // Unexpected error — still return a failure response so Sewn's
+                // continuation always resolves. Returning nil would leave Sewn's
                 // write queue frozen until the session drops.
                 logger.warning("MothershipRequestDispatcher: [\(tag)] indexRequest — dispatch failed: \(error)")
-                var failResp = Totem_V1_TotemIndexResponse()
+                var failResp = Thread_V1_ThreadIndexResponse()
                 failResp.success = false
                 failResp.indexedCount = 0
                 response.payload = .indexResponse(failResp)

@@ -1,6 +1,6 @@
-# Totem Skills
+# Thread Skills
 
-Maintenance, reference, and operational knowledge for every system in Totem. Use these when building new features, auditing existing behavior, writing tests, or debugging distributed search.
+Maintenance, reference, and operational knowledge for every system in Thread. Use these when building new features, auditing existing behavior, writing tests, or debugging distributed search.
 
 ---
 
@@ -11,7 +11,7 @@ Skills/
 ├── Database/             — Vector database internals
 │   └── README.md         — PartitionTable, GraphStore (KG), PQ compression, Registry
 │
-├── GRPC/                 — gRPC services and Seer session
+├── GRPC/                 — gRPC services and Sewn session
 │   └── README.md         — Service impls, session stream, mothership registration, dispatcher
 │
 ├── Providers/            — Embedding model backends
@@ -33,7 +33,7 @@ Skills/
 
 | I want to... | Go to |
 |---|---|
-| Understand how Totem connects to Seer | [GRPC/README.md](GRPC/README.md) |
+| Understand how Thread connects to Sewn | [GRPC/README.md](GRPC/README.md) |
 | Add or modify a gRPC service | [GRPC/README.md](GRPC/README.md) |
 | Understand the knowledge graph and PQ compression | [Database/README.md](Database/README.md) |
 | Change how documents are indexed or searched | [Database/README.md](Database/README.md) |
@@ -53,7 +53,7 @@ Skills/
 | **GraphStore** | Knowledge graph: content-addressed entities, weighted relationships, BFS traversal |
 | **PQ (PartitionQuantizer)** | Product quantization: compresses 1024-float vectors to compact UInt16 codes |
 | **Registry** | Ownership layer: document-to-owner mapping, deduplication, access control |
-| **GRPC** | Session stream: registers with Seer, dispatches bidirectional session messages |
+| **GRPC** | Session stream: registers with Sewn, dispatches bidirectional session messages |
 | **Providers** | Embedding backends: Mistral API (priority queue) or on-device MLX |
 | **Concurrency** | Mutators: serialized write paths for the registry and partition table |
 | **Persistence** | Plist snapshots: debounced full-file saves, startup reconciliation sweeps |

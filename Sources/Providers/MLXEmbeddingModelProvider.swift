@@ -10,7 +10,7 @@ import Frigate
 ///
 /// All GPU work (model load, tokenization scheduling, batching, allocator
 /// hygiene) lives in `FrigateEmbedder` — one code path shared with every other
-/// Frigate host. This provider adds Totem's `EmbeddingProviding` surface:
+/// Frigate host. This provider adds Thread's `EmbeddingProviding` surface:
 /// preprocess slots and the `EmbeddingData`/usage response shapes.
 actor MLXEmbeddingModelProvider: EmbeddingProviding {
     private let embedder: FrigateEmbedder

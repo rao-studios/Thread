@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot setup for Totem with MLX CUDA embeddings on Ubuntu 24.04 (Noble).
+# One-shot setup for Thread with MLX CUDA embeddings on Ubuntu 24.04 (Noble).
 # Run once on a fresh machine, then use build-linux-cuda.sh to build.
 #
 # What this installs:
@@ -124,4 +124,4 @@ echo "  3. Build:"
 echo "       ./build-linux-cuda.sh"
 echo ""
 echo "  4. Run:"
-echo "       .build/debug/totem --host 127.0.0.1 --port 8080 --use-mlx"
+echo "       .build/debug/thread --host 127.0.0.1 --port 8080 --use-mlx"

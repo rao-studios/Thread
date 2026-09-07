@@ -21,13 +21,13 @@ final class AppState: ObservableObject {
 
     // MARK: - Persisted config
 
-    @AppStorage("seerServerURL")    var serverURL:      String = "http://127.0.0.1:8080"
-    @AppStorage("totemServerURL")   var totemURL:       String = "http://127.0.0.1:8081"
-    @AppStorage("seerOwnerId")      var ownerId:        String = "database-demo"
-    @AppStorage("seerGroupId")      var groupId:        String = "demo-group"
-    @AppStorage("seerBearerToken")  var bearerToken:    String = ""
-    @AppStorage("seerRefreshToken") var refreshToken:   String = ""
-    @AppStorage("seerTokenExpiry")  var tokenExpiry:    Double = 0
+    @AppStorage("sewnServerURL")    var serverURL:      String = "http://127.0.0.1:8080"
+    @AppStorage("threadServerURL")   var threadURL:       String = "http://127.0.0.1:8081"
+    @AppStorage("sewnOwnerId")      var ownerId:        String = "database-demo"
+    @AppStorage("sewnGroupId")      var groupId:        String = "demo-group"
+    @AppStorage("sewnBearerToken")  var bearerToken:    String = ""
+    @AppStorage("sewnRefreshToken") var refreshToken:   String = ""
+    @AppStorage("sewnTokenExpiry")  var tokenExpiry:    Double = 0
 
     var isSignedIn: Bool { !bearerToken.isEmpty }
 
@@ -41,7 +41,7 @@ final class AppState: ObservableObject {
     var api: DatabaseAPI {
         DatabaseAPI(
             databaseBaseURL: serverURL,
-            totemBaseURL: totemURL,
+            threadBaseURL: threadURL,
             ownerId: ownerId,
             groupId: groupId,
             groupLabel: "Demo",

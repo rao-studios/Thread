@@ -1,16 +1,16 @@
 import Foundation
 import Logging
 
-/// Minimal Sinatra stub for Totem — all methods return identity (no adjustment).
+/// Minimal Sinatra stub for Thread — all methods return identity (no adjustment).
 /// The full GBT/SVM ranking engine is not included; distances pass through unchanged.
 class Sinatra: @unchecked Sendable {
-    internal let logger: TotemLogger
+    internal let logger: ThreadLogger
 
     nonisolated(unsafe) static var sentimentContextLimit: Int = 4
     static let maxParkedEntries: Int = 30
 
     init(logger: Logger) {
-        self.logger = TotemLogger(logger)
+        self.logger = ThreadLogger(logger)
     }
 
     var registry: SinatraRegistry? { nil }

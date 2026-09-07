@@ -13,7 +13,7 @@ struct SearchRequest: Codable {
     let train: Bool
     /// Whether the one-hop graph expansion runs after the direct scan. Defaults to true.
     let expand: Bool
-    let totem: DatabaseRequest
+    let thread: DatabaseRequest
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -21,6 +21,6 @@ struct SearchRequest: Codable {
         query = try container.decode(String.self, forKey: .query)
         train = try container.decodeIfPresent(Bool.self, forKey: .train) ?? false
         expand = try container.decodeIfPresent(Bool.self, forKey: .expand) ?? true
-        totem = try container.decode(DatabaseRequest.self, forKey: .totem)
+        thread = try container.decode(DatabaseRequest.self, forKey: .thread)
     }
 }

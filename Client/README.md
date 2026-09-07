@@ -1,23 +1,23 @@
-# SeerDemo
+# SewnDemo
 
 <p align="center">
-  <img src="../README_Assets/1.png" alt="SeerDemo — Library and Search" width="720" />
+  <img src="../README_Assets/1.png" alt="SewnDemo — Library and Search" width="720" />
 </p>
 
-A macOS demo app for [SeerMini](../README.md). Drag-and-drop or select files from your filesystem, embed them into the local vector index via the SeerMini server, then search across them with a semantic query — all from a single split-view window.
+A macOS demo app for [SewnMini](../README.md). Drag-and-drop or select files from your filesystem, embed them into the local vector index via the SewnMini server, then search across them with a semantic query — all from a single split-view window.
 
 ## Requirements
 
 - macOS 14+
-- SeerMini server running locally (see [setup](../README.md#build--run))
+- SewnMini server running locally (see [setup](../README.md#build--run))
 
 ## Running
 
-Open `Package.swift` in Xcode, select the **SeerDemo** scheme, and press Run. Or from the terminal:
+Open `Package.swift` in Xcode, select the **SewnDemo** scheme, and press Run. Or from the terminal:
 
 ```bash
-cd SeerMini/Demo
-swift run SeerDemo
+cd SewnMini/Demo
+swift run SewnDemo
 ```
 
 The app connects to `http://127.0.0.1:8081` by default. Click the gear icon in the Library toolbar to change the server URL or owner ID.

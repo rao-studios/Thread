@@ -2,7 +2,7 @@ import Foundation
 import Hummingbird
 
 func registerSearchRoute(
-    _ app: some RouterMethods<TotemRequestContext>,
+    _ app: some RouterMethods<ThreadRequestContext>,
     _ database: Database,
     embeddingModelProvider: any EmbeddingProviding
 ) {
@@ -14,7 +14,7 @@ func registerSearchRoute(
 
         let result = try await database.search(
             searchRequest.query,
-            request: searchRequest.totem.withRequestID(context.id),
+            request: searchRequest.thread.withRequestID(context.id),
             embeddingModelProvider: embeddingModelProvider,
             expand: searchRequest.expand
         )

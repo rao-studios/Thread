@@ -46,7 +46,7 @@ struct PartitionIndex: Codable {
         _ partitions: [Database.Partition],
         entityIds: [EntityID] = [],
         documentId: String,
-        logger: TotemLogger
+        logger: ThreadLogger
     ) {
         var partitions = partitions
         let embeddingVectors = partitions.map { $0.embedding }
@@ -87,7 +87,7 @@ struct PartitionIndex: Codable {
                 request: DatabaseRequest,
                 metadataLoader: PartitionDataLoader? = nil,
                 adjustWithSinatra: Bool = true,
-                logger: TotemLogger) -> (result: PartitionSearchResult, adjustment: SinatraAdjustment?) {
+                logger: ThreadLogger) -> (result: PartitionSearchResult, adjustment: SinatraAdjustment?) {
 
         let distanceTable = pq.buildDistanceTable(queryVector: queryEmbedding)
         let topK = topKSlotsByDistance(table: distanceTable, k: k)

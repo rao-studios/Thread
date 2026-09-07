@@ -14,7 +14,7 @@ private struct AvailabilityResponse: ResponseCodable {
 }
 
 func registerAvailabilityRoute(
-    _ app: some RouterMethods<TotemRequestContext>,
+    _ app: some RouterMethods<ThreadRequestContext>,
     registrationClient: MothershipRegistrationClient
 ) {
     app.post("/v1/availability") { request, context async throws -> AvailabilityResponse in

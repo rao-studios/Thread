@@ -2,13 +2,13 @@ import Foundation
 import Hummingbird
 
 func registerGraphRoute(
-    _ app: some RouterMethods<TotemRequestContext>,
+    _ app: some RouterMethods<ThreadRequestContext>,
     _ database: Database,
     embeddingModelProvider: any EmbeddingProviding
 ) {
     app.post("/v1/graph") { request, context async throws -> GraphResponse in
         let graphReq = try await request.decode(as: GraphRequest.self, context: context)
-        let databaseReq = graphReq.totem.withRequestID(context.id)
+        let databaseReq = graphReq.thread.withRequestID(context.id)
 
         // No entity/query → browse mode: graphQuery returns the whole graph
         // (kind-filtered, capped by mention count).

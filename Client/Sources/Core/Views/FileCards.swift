@@ -20,7 +20,7 @@ struct FileTypeIcon: View {
         case "json", "xml", "csv":
             return (Color(red: 0.38, green: 0.55, blue: 0.38), "DAT")
         case "txt", "text":
-            return (Color.seerInk.opacity(0.55), "TXT")
+            return (Color.sewnInk.opacity(0.55), "TXT")
         case "html", "htm":
             return (Color(red: 0.91, green: 0.42, blue: 0.13), "HTML")
         case "swift":
@@ -30,7 +30,7 @@ struct FileTypeIcon: View {
         case "js", "ts":
             return (Color(red: 0.95, green: 0.77, blue: 0.15), "JS")
         default:
-            return (Color.seerInk.opacity(0.28), "FILE")
+            return (Color.sewnInk.opacity(0.28), "FILE")
         }
     }
 
@@ -42,7 +42,7 @@ struct FileTypeIcon: View {
                 .fill(Color(nsColor: .controlBackgroundColor))
                 .overlay(
                     RoundedRectangle(cornerRadius: 3)
-                        .strokeBorder(Color.seerInk.opacity(0.10), lineWidth: 1)
+                        .strokeBorder(Color.sewnInk.opacity(0.10), lineWidth: 1)
                 )
                 .frame(width: 40, height: 50)
 
@@ -62,7 +62,7 @@ struct FileTypeIcon: View {
                 p.addLine(to: CGPoint(x: 27, y: 13))
                 p.closeSubpath()
             }
-            .stroke(Color.seerInk.opacity(0.10), lineWidth: 0.5)
+            .stroke(Color.sewnInk.opacity(0.10), lineWidth: 0.5)
             .frame(width: 40, height: 50)
 
             // File type label
@@ -91,8 +91,8 @@ struct DocumentFileCard: View {
 
             VStack(spacing: 4) {
                 Text(doc.name)
-                    .font(.seerSans(11))
-                    .foregroundStyle(Color.seerInk)
+                    .font(.sewnSans(11))
+                    .foregroundStyle(Color.sewnInk)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: 96)
@@ -102,8 +102,8 @@ struct DocumentFileCard: View {
                         .fill(Color(red: 0.30, green: 0.69, blue: 0.31))
                         .frame(width: 5, height: 5)
                     Text("indexed")
-                        .font(.seerSans(10))
-                        .foregroundStyle(Color.seerInk.opacity(0.30))
+                        .font(.sewnSans(10))
+                        .foregroundStyle(Color.sewnInk.opacity(0.30))
                 }
             }
         }
@@ -112,10 +112,10 @@ struct DocumentFileCard: View {
         .frame(width: 120)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(isHovered ? Color.seerFill : Color.clear)
+                .fill(isHovered ? Color.sewnFill : Color.clear)
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(isHovered ? Color.seerBorder : Color.clear, lineWidth: 1)
+                        .strokeBorder(isHovered ? Color.sewnBorder : Color.clear, lineWidth: 1)
                 )
         )
         .animation(.easeInOut(duration: 0.15), value: isHovered)
@@ -131,7 +131,7 @@ struct UploadingFileCard: View {
     private var isError: Bool { file.status.isError }
     private var isDone:  Bool { file.status.isDone }
 
-    private var accentColor: Color { isError ? Color.seerError : Color.seerGold }
+    private var accentColor: Color { isError ? Color.sewnError : Color.sewnGold }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -139,14 +139,14 @@ struct UploadingFileCard: View {
 
             VStack(spacing: 4) {
                 Text(file.name)
-                    .font(.seerSans(11))
-                    .foregroundStyle(Color.seerInk)
+                    .font(.sewnSans(11))
+                    .foregroundStyle(Color.sewnInk)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: 96)
 
                 Text(file.status.label)
-                    .font(.seerSans(10).italic())
+                    .font(.sewnSans(10).italic())
                     .foregroundStyle(accentColor.opacity(0.85))
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
@@ -180,20 +180,20 @@ struct ServerStatusDot: View {
                 .fill(dotColor)
                 .frame(width: 6, height: 6)
             Text(dotLabel)
-                .font(.seerSans(10))
-                .foregroundStyle(Color.seerInk.opacity(0.35))
+                .font(.sewnSans(10))
+                .foregroundStyle(Color.sewnInk.opacity(0.35))
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 4)
-        .background(Color.seerFill)
+        .background(Color.sewnFill)
         .clipShape(Capsule())
     }
 
     private var dotColor: Color {
         switch reachable {
         case .some(true):  return Color(red: 0.30, green: 0.69, blue: 0.31)
-        case .some(false): return Color.seerError
-        case .none:        return Color.seerInk.opacity(0.25)
+        case .some(false): return Color.sewnError
+        case .none:        return Color.sewnInk.opacity(0.25)
         }
     }
 

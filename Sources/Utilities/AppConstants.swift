@@ -1,6 +1,6 @@
 //
 //  AppConstants.swift
-//  totem
+//  thread
 //
 //  Created by Ritesh Pakala on 10/26/25.
 //  Based on: https://github.com/mzbac/swift-mlx-server

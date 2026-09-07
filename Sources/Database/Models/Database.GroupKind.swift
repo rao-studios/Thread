@@ -36,7 +36,7 @@ extension Database {
         ///   - anything else           → `.document`
         ///
         /// Falls back to `.document` when the registry or mapping is unavailable.
-        static func resolve(for partition: Partition, registry: TotemRegistry?) -> GroupKind {
+        static func resolve(for partition: Partition, registry: ThreadRegistry?) -> GroupKind {
             let ownerId = partition.ownerId
             // Prefer per-owner group mapping; fall back to canonical for migrated registries.
             let groupId = registry?.ownerDocumentGroup[ownerId]?[partition.documentId]

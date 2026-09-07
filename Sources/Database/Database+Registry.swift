@@ -8,10 +8,10 @@ extension Database {
         // each node's boot sweeps reap the other nodes' documents. The legacy
         // file seeds this node's first scoped registry and is left in place
         // for any node that has not migrated yet.
-        var registry: TotemRegistry
-        if let scoped: TotemRegistry = storage.restore() {
+        var registry: ThreadRegistry
+        if let scoped: ThreadRegistry = storage.restore() {
             registry = scoped
-        } else if let legacy: TotemRegistry = FilePersistence(
+        } else if let legacy: ThreadRegistry = FilePersistence(
             key: "registry", kind: .basic, logger: logger.base).restore() {
             registry = legacy
             storage.save(state: registry)
@@ -117,7 +117,7 @@ extension Database {
     @discardableResult
     func updateDocumentAccess(_ id: String,
                               ownerId: String,
-                              access: TotemRegistry.Access) async -> Bool {
+                              access: ThreadRegistry.Access) async -> Bool {
         let updated = await registryMutator.updateDocumentAccess(id: id, ownerId: ownerId, access: access)
         if !updated {
             logger.info("Registry", "Owner does not own this document.", service: .database)
@@ -129,7 +129,7 @@ extension Database {
 extension Database {
     nonisolated func groups(for ownerId: OwnerID) -> [Database.Group] {
         guard let registry else { return [] }
-        let owner = TotemRegistry.Owner(id: ownerId)
+        let owner = ThreadRegistry.Owner(id: ownerId)
         return (registry.ownersGroups[owner] ?? []).compactMap { entry in
             guard entry.ownerId == owner.id else { return nil }
             return buildGroup(entry: entry, registry: registry)
@@ -146,7 +146,7 @@ extension Database {
     /// Useful for pagination: apply cursor/limit to the entries, then buildGroup only on the page.
     nonisolated func groupEntries(for ownerId: OwnerID) -> [Database.Group] {
         guard let registry else { return [] }
-        let owner = TotemRegistry.Owner(id: ownerId)
+        let owner = ThreadRegistry.Owner(id: ownerId)
         return (registry.ownersGroups[owner] ?? []).filter { $0.ownerId == owner.id }
     }
 
@@ -174,7 +174,7 @@ extension Database {
     @discardableResult
     func updateGroupAccess(_ id: String,
                            ownerId: String,
-                           access: TotemRegistry.Access) async -> Bool {
+                           access: ThreadRegistry.Access) async -> Bool {
         let updated = await registryMutator.updateGroupAccess(id: id, ownerId: ownerId, access: access)
         if !updated {
             logger.info("Registry", "Owner does not own this group.", service: .database)
@@ -197,7 +197,7 @@ extension Database {
         await registryMutator.updateGroup(group, documentId: documentId, ownerId: ownerId)
     }
 
-    nonisolated var registry: TotemRegistry? { registryMutator.snapshot }
+    nonisolated var registry: ThreadRegistry? { registryMutator.snapshot }
 
     nonisolated func coOwners(for documentIds: some Collection<DocumentID>) -> [DocumentID: Set<OwnerID>] {
         guard let reg = registry else { return [:] }

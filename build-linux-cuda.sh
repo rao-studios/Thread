@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Totem on Linux with MLX CUDA backend (GPU) or CPU fallback.
+# Build Thread on Linux with MLX CUDA backend (GPU) or CPU fallback.
 #
 # Requirements:
 #   - Swift 6.3+
@@ -57,7 +57,7 @@ swift build -c "$BUILD_CONFIG" --jobs 2
 echo ""
 echo "Done. Run with:"
 if [[ $BUILD_CONFIG == "release" ]]; then
-    echo "  .build/release/totem --use-mlx --mlx-model mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
+    echo "  .build/release/thread --use-mlx --mlx-model mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
 else
-    echo "  .build/debug/totem --use-mlx --mlx-model mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
+    echo "  .build/debug/thread --use-mlx --mlx-model mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
 fi

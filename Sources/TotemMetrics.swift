@@ -1,1 +1,0 @@
-// Metrics removed from Totem.

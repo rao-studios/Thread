@@ -20,18 +20,18 @@ import Logging
 ///      the storage identity and the network identity are always the same value —
 ///      no coordination required between the persistence layer and the mesh overlay.
 ///
-/// The identity file lives at `totem-db/node-id`.
+/// The identity file lives at `thread-db/node-id`.
 struct NodeIdentity {
     let nodeId: UUID
 
-    /// Load (or create) the node identity from `totem-db/node-id`.
+    /// Load (or create) the node identity from `thread-db/node-id`.
     /// Synchronous — safe to call from a non-async context at server startup,
     /// before the cooperative thread pool is active.
     ///
     /// - Parameter override: When non-nil, this UUID is written to the node-id
     ///   file and returned directly, replacing any previously persisted identity.
     ///   Useful for `--node-id` CLI deployments where a stable, human-chosen UUID
-    ///   is required (e.g. a fixed personal-totem setup).
+    ///   is required (e.g. a fixed personal-thread setup).
     static func load(override: UUID? = nil, logger: Logger) -> NodeIdentity {
         let dir = FilePersistence.getDefaultURL()
         let url = dir.appendingPathComponent("node-id")
@@ -50,7 +50,7 @@ struct NodeIdentity {
         }
         // First launch: generate a fresh UUID and persist it atomically.
         // NodeIdentity.load() is called before TableMutator.init() which normally
-        // creates the totem-db/ directory via FilePersistence.init(). Create it
+        // creates the thread-db/ directory via FilePersistence.init(). Create it
         // explicitly here so the write doesn't fail silently on the very first run.
         let fresh = UUID()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

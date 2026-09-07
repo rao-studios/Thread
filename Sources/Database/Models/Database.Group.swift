@@ -15,7 +15,7 @@ extension Database {
         var label: String
         var ownerId: String
         var documents: [Database.Document]
-        var access: TotemRegistry.Access?
+        var access: ThreadRegistry.Access?
         /// Aggregate credits earned by all documents in this group across every
         /// inference where any of its partitions were retrieved and priced.
         /// Computed at response time by summing `document.totalEarned` — not stored
@@ -29,7 +29,7 @@ extension Database {
              label: String,
              ownerId: String,
              documents: [Database.Document],
-             access: TotemRegistry.Access? = nil,
+             access: ThreadRegistry.Access? = nil,
              totalEarnings: Gita.Credits? = nil,
              metadata: Metadata? = nil) {
             self.id = id
@@ -57,7 +57,7 @@ extension Database {
             label        = try c.decode(String.self,                 forKey: .label)
             ownerId      = try c.decode(String.self,                 forKey: .ownerId)
             documents    = try c.decodeIfPresent([Database.Document].self, forKey: .documents) ?? []
-            access       = try c.decodeIfPresent(TotemRegistry.Access.self, forKey: .access)
+            access       = try c.decodeIfPresent(ThreadRegistry.Access.self, forKey: .access)
             totalEarnings = try c.decodeIfPresent(Gita.Credits.self, forKey: .totalEarnings)
             metadata     = try c.decodeIfPresent(Metadata.self,      forKey: .metadata)
         }

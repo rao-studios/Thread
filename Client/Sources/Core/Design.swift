@@ -3,28 +3,28 @@ import SwiftUI
 // MARK: - Palette (SC from Search+View.tsx)
 
 extension Color {
-    static let seerBG     = Color(red: 250/255, green: 249/255, blue: 246/255)
-    static let seerInk    = Color(red:  45/255, green:  49/255, blue:  66/255)
-    static let seerGold   = Color(red: 174/255, green: 144/255, blue:  96/255)
-    static var seerBorder: Color { Color.seerGold.opacity(0.22) }
-    static var seerCard:   Color { Color.white.opacity(0.62) }
-    static var seerFill:   Color { Color.seerInk.opacity(0.05) }
-    static let seerError  = Color(red: 200/255, green:  60/255, blue:  60/255)
+    static let sewnBG     = Color(red: 250/255, green: 249/255, blue: 246/255)
+    static let sewnInk    = Color(red:  45/255, green:  49/255, blue:  66/255)
+    static let sewnGold   = Color(red: 174/255, green: 144/255, blue:  96/255)
+    static var sewnBorder: Color { Color.sewnGold.opacity(0.22) }
+    static var sewnCard:   Color { Color.white.opacity(0.62) }
+    static var sewnFill:   Color { Color.sewnInk.opacity(0.05) }
+    static let sewnError  = Color(red: 200/255, green:  60/255, blue:  60/255)
 }
 
 // MARK: - Typography
 
 extension Font {
-    static func seerSerif(_ size: CGFloat, weight: Font.Weight = .regular, italic: Bool = false) -> Font {
+    static func sewnSerif(_ size: CGFloat, weight: Font.Weight = .regular, italic: Bool = false) -> Font {
         let f = Font.system(size: size, weight: weight, design: .serif)
         return italic ? f.italic() : f
     }
 
-    static func seerSans(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+    static func sewnSans(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight)
     }
 
-    static func seerMono(_ size: CGFloat) -> Font {
+    static func sewnMono(_ size: CGFloat) -> Font {
         .system(size: size, design: .monospaced)
     }
 }
@@ -32,8 +32,8 @@ extension Font {
 // MARK: - Icon helpers
 
 extension Image {
-    static var seerIcon: Image {
-        if let img = Bundle.module.image(forResource: "seer_icon_480") {
+    static var sewnIcon: Image {
+        if let img = Bundle.module.image(forResource: "sewn_icon_480") {
             return Image(nsImage: img)
         }
         return Image(systemName: "eye.fill")
@@ -61,7 +61,7 @@ struct DatabaseSpinningIcon: View {
 
     @ViewBuilder
     private var iconContent: some View {
-        if let img = Bundle.module.image(forResource: "seer_icon_480") {
+        if let img = Bundle.module.image(forResource: "sewn_icon_480") {
             Image(nsImage: img)
                 .resizable()
                 .frame(width: size, height: size)
@@ -70,7 +70,7 @@ struct DatabaseSpinningIcon: View {
         } else {
             ZStack {
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(Color.seerGold)
+                    .fill(Color.sewnGold)
                 Image(systemName: "eye.fill")
                     .font(.system(size: size * 0.4, weight: .light))
                     .foregroundStyle(.white)
@@ -93,7 +93,7 @@ struct DatabaseOrbitRings: View {
             // Outer dashed ring
             Circle()
                 .strokeBorder(
-                    Color.seerGold.opacity(0.30),
+                    Color.sewnGold.opacity(0.30),
                     style: StrokeStyle(lineWidth: 1, dash: [5, 3])
                 )
                 .frame(width: iconSize + 40, height: iconSize + 40)
@@ -106,7 +106,7 @@ struct DatabaseOrbitRings: View {
 
             // Inner solid ring
             Circle()
-                .strokeBorder(Color.seerGold.opacity(0.30), lineWidth: 1)
+                .strokeBorder(Color.sewnGold.opacity(0.30), lineWidth: 1)
                 .frame(width: iconSize + 14, height: iconSize + 14)
                 .rotationEffect(.degrees(innerRotation))
                 .onAppear {
@@ -119,7 +119,7 @@ struct DatabaseOrbitRings: View {
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [Color.seerGold.opacity(0.15), .clear],
+                        colors: [Color.sewnGold.opacity(0.15), .clear],
                         center: .center, startRadius: 0, endRadius: iconSize * 0.6
                     )
                 )

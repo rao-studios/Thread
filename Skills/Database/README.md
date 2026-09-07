@@ -1,6 +1,6 @@
 # Database
 
-The `Database` actor is Totem's storage and search core. It owns every piece of mutable state: the partition table, the knowledge graph, and the registry. All reads and writes are serialized through this actor.
+The `Database` actor is Thread's storage and search core. It owns every piece of mutable state: the partition table, the knowledge graph, and the registry. All reads and writes are serialized through this actor.
 
 ---
 
@@ -8,8 +8,8 @@ The `Database` actor is Totem's storage and search core. It owns every piece of 
 
 ```
 Database (actor)
-├── RegistryMutator        — serialized writes to TotemRegistry
-│   └── TotemRegistry      — ownership, deduplication, access control
+├── RegistryMutator        — serialized writes to ThreadRegistry
+│   └── ThreadRegistry      — ownership, deduplication, access control
 ├── TableMutator           — serialized writes to PartitionTable + GraphStore
 │   ├── PartitionTable     — per-document PQ search index
 │   │   └── PartitionIndex × M — one per document
@@ -24,7 +24,7 @@ The `PartitionTable` and `GraphStore` mutate together on every put/remove (a doc
 
 ## Registry
 
-`TotemRegistry` is the ownership and access-control layer. Every document must be registered before it can be indexed or searched.
+`ThreadRegistry` is the ownership and access-control layer. Every document must be registered before it can be indexed or searched.
 
 | Concept | Description |
 |---|---|
@@ -84,7 +84,7 @@ Entity/relationship extraction happens at ingest: caller-provided payloads, keyw
 - Codebook size scales with training corpus: small documents use k=2; large shared indices may reach k=2048.
 - Search uses **Asymmetric Distance Computation (ADC)**: pre-compute distance tables from the query to all centroids, then scan compressed codes in tight loops — no full vector loads needed.
 - `adaptiveThreshold` is calibrated per-document from reconstruction errors and overrides the static per-codec fallback at search time.
-- Training runs on GPU via `MLXAccelerate.kmeans` when enabled (`TOTEM_PQ_MLX`), CPU k-means++ otherwise.
+- Training runs on GPU via `MLXAccelerate.kmeans` when enabled (`THREAD_PQ_MLX`), CPU k-means++ otherwise.
 
 ---
 
@@ -104,7 +104,7 @@ Entity/relationship extraction happens at ingest: caller-provided payloads, keyw
 
 1. `Database+Put.putBatch(request:)` receives text chunks, a `GraphPayload`, and owner metadata (embedding + provisional entity resolution already ran in the route/gRPC layer).
 2. Parts files (`documents/{id}-parts`) are pre-written in a bounded parallel task group.
-3. Register document with `TotemRegistry` (or link existing if deduplicated).
+3. Register document with `ThreadRegistry` (or link existing if deduplicated).
 4. `TableMutator.putBatch`: `graphStore.upsert(...)` resolves entity IDs → `table.put(...)` trains a fresh `PartitionIndex`.
 5. Both stores flush on a shared 1-second debounce; removes and shutdown save immediately.
 

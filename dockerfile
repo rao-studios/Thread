@@ -19,10 +19,10 @@ FROM swift:6.0.0-jammy-slim
 WORKDIR /app
 
 # Copy the actual binary
-COPY --from=builder /build/.build/release/seer-server /app/
+COPY --from=builder /build/.build/release/thread /app/
 
 # Expose port
 EXPOSE 8080
 
 # Run with the correct flags
-CMD ["/app/totem-server", "--host", "0.0.0.0", "--port", "8080", "--mothership-host", "10.0.0.132"]
+CMD ["/app/thread", "--host", "0.0.0.0", "--port", "8080", "--mothership-host", "10.0.0.132"]

@@ -15,7 +15,7 @@ struct SearchView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .top) {
-                Color.seerBG.ignoresSafeArea()
+                Color.sewnBG.ignoresSafeArea()
 
                 // Ambient warm glow — fades when results show
                 ambientGlow(geo: geo)
@@ -59,7 +59,7 @@ struct SearchView: View {
         Circle()
             .fill(
                 RadialGradient(
-                    colors: [Color.seerGold.opacity(0.13), .clear],
+                    colors: [Color.sewnGold.opacity(0.13), .clear],
                     center: .center, startRadius: 0, endRadius: 300
                 )
             )
@@ -91,8 +91,8 @@ struct SearchView: View {
                     .frame(maxWidth: min(560, geo.size.width - 48))
 
                     Text("See beyond the surface")
-                        .font(.seerSerif(13, italic: true))
-                        .foregroundStyle(Color.seerInk.opacity(0.35))
+                        .font(.sewnSerif(13, italic: true))
+                        .foregroundStyle(Color.sewnInk.opacity(0.35))
                         .tracking(0.4)
                 }
             }
@@ -111,8 +111,8 @@ struct SearchView: View {
             DatabaseSpinningIcon(size: 44, cornerRadius: 11, opacity: 0.85)
 
             Text("Searching…")
-                .font(.seerSerif(15, italic: true))
-                .foregroundStyle(Color.seerInk.opacity(0.35))
+                .font(.sewnSerif(15, italic: true))
+                .foregroundStyle(Color.sewnInk.opacity(0.35))
                 .tracking(0.8)
 
             Spacer()
@@ -136,8 +136,8 @@ struct SearchView: View {
                         Text(
                             "\(appState.searchResults.count) result\(appState.searchResults.count == 1 ? "" : "s")  \u{00B7}  \u{201C}\(appState.lastQuery)\u{201D}"
                         )
-                        .font(.seerSans(10))
-                        .foregroundStyle(Color.seerInk.opacity(0.35))
+                        .font(.sewnSans(10))
+                        .foregroundStyle(Color.sewnInk.opacity(0.35))
                         .tracking(1.4)
                         .textCase(.uppercase)
 
@@ -150,7 +150,7 @@ struct SearchView: View {
                         } label: {
                             Image(systemName: "xmark")
                                 .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(Color.seerInk.opacity(0.30))
+                                .foregroundStyle(Color.sewnInk.opacity(0.30))
                         }
                         .buttonStyle(.plain)
                         .help("Clear results")
@@ -184,8 +184,8 @@ struct SearchView: View {
                 HStack(spacing: 9) {
                     DatabaseSpinningIcon(size: 30, cornerRadius: 7)
                     Text("Database")
-                        .font(.seerSerif(20, italic: true))
-                        .foregroundStyle(Color.seerInk)
+                        .font(.sewnSerif(20, italic: true))
+                        .foregroundStyle(Color.sewnInk)
                 }
             }
             .buttonStyle(.plain)
@@ -204,7 +204,7 @@ struct SearchView: View {
         .background(.ultraThinMaterial)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(Color.seerBorder)
+                .fill(Color.sewnBorder)
                 .frame(height: 1)
         }
     }
@@ -214,24 +214,24 @@ struct SearchView: View {
     private func errorBanner(_ message: String) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(Color.seerError)
+                .foregroundStyle(Color.sewnError)
                 .font(.system(size: 14))
             VStack(alignment: .leading, spacing: 3) {
                 Text("Search failed")
-                    .font(.seerSans(12, weight: .medium))
-                    .foregroundStyle(Color.seerInk.opacity(0.75))
+                    .font(.sewnSans(12, weight: .medium))
+                    .foregroundStyle(Color.sewnInk.opacity(0.75))
                 Text(message)
-                    .font(.seerSans(11))
-                    .foregroundStyle(Color.seerInk.opacity(0.50))
+                    .font(.sewnSans(11))
+                    .foregroundStyle(Color.sewnInk.opacity(0.50))
                     .lineLimit(3)
             }
             Spacer()
         }
         .padding(16)
-        .background(Color.seerError.opacity(0.05))
+        .background(Color.sewnError.opacity(0.05))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.seerError.opacity(0.18), lineWidth: 1)
+                .strokeBorder(Color.sewnError.opacity(0.18), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }

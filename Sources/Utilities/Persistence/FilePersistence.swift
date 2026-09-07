@@ -44,7 +44,7 @@ final class FilePersistence : AnyPersistence, @unchecked Sendable {
     
     static func getDefaultURL() -> URL {
         let value = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return value.appendingPathComponent("totem-db")
+        return value.appendingPathComponent("thread-db")
     }
     
     func save<State>(state: State,

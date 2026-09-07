@@ -7,7 +7,7 @@
 
 import Foundation
 
-/// Serializes all read-modify-write operations on the TotemRegistry file.
+/// Serializes all read-modify-write operations on the ThreadRegistry file.
 ///
 /// Without this actor, concurrent embedding requests each load the same registry
 /// state, apply their mutations locally, and save — last write wins, silently
@@ -17,8 +17,8 @@ import Foundation
 /// Mirrors `TableMutator`: every method that mutates the registry must go through
 /// this actor so each operation sees the full result of the previous one.
 actor RegistryMutator {
-    private let cache: TotemCache<TotemRegistry>
-    private let logger: TotemLogger
+    private let cache: ThreadCache<ThreadRegistry>
+    private let logger: ThreadLogger
 
     // MARK: - Debounced disk saves
 
@@ -29,8 +29,8 @@ actor RegistryMutator {
     /// graph. A single shared `registry` file let every co-located node's boot
     /// sweeps treat the other nodes' documents as orphans — each restart
     /// reaped every other node's registrations.
-    init(nodeId: UUID, logger: TotemLogger) {
-        self.cache = TotemCache(
+    init(nodeId: UUID, logger: ThreadLogger) {
+        self.cache = ThreadCache(
             persistence: FilePersistence(key: "registry-\(nodeId)", kind: .basic, logger: logger.base)
         )
         self.logger = logger
@@ -39,17 +39,17 @@ actor RegistryMutator {
     // MARK: - Startup seeding
 
     /// Seeds the lock-protected snapshot synchronously at startup — no actor hop required.
-    nonisolated func seed(_ initial: TotemRegistry) { cache.seed(initial) }
+    nonisolated func seed(_ initial: ThreadRegistry) { cache.seed(initial) }
 
     // MARK: - Snapshot
 
     /// Synchronous, lock-protected read of the latest registry state.
     /// Never hops the actor queue — safe to call from any context.
-    nonisolated var snapshot: TotemRegistry? { cache.snapshot }
+    nonisolated var snapshot: ThreadRegistry? { cache.snapshot }
 
     // MARK: - Private
 
-    private func loadedRegistry() async -> TotemRegistry {
+    private func loadedRegistry() async -> ThreadRegistry {
         return await cache.load { .init() }
     }
 
@@ -68,7 +68,7 @@ actor RegistryMutator {
         flushTask?.cancel()
         flushTask = nil
         registryDirty = false
-        let empty = TotemRegistry()
+        let empty = ThreadRegistry()
         cache.update(empty)
         await cache.saveNow(empty)
     }
@@ -165,7 +165,7 @@ actor RegistryMutator {
         ownerId: String
     ) async -> (authorized: Bool, fullyRemoved: Bool) {
         var registry = await loadedRegistry()
-        let owner = TotemRegistry.Owner(id: ownerId)
+        let owner = ThreadRegistry.Owner(id: ownerId)
         guard registry.documentOwners[documentId]?.contains(owner) == true else {
             return (false, false)
         }
@@ -185,7 +185,7 @@ actor RegistryMutator {
     ///     callers should remove all from the personal HNSW.
     func removeAll(ownerId: String) async -> (fullyRemoved: [DocumentID], allOwned: [DocumentID]) {
         var registry = await loadedRegistry()
-        let owner = TotemRegistry.Owner(id: ownerId)
+        let owner = ThreadRegistry.Owner(id: ownerId)
         let documentIds = registry.ownersDocuments[owner] ?? []
         let ownedGroupIds = (registry.ownersGroups[owner] ?? []).map { $0.id }
 
@@ -218,10 +218,10 @@ actor RegistryMutator {
         items: [(documentId: DocumentID, ownerId: String)]
     ) async -> [DocumentID] {
         _ = await loadedRegistry()
-        var registry = cache.snapshot ?? TotemRegistry()
+        var registry = cache.snapshot ?? ThreadRegistry()
         var fullyRemoved: [DocumentID] = []
         for (documentId, ownerId) in items {
-            let owner = TotemRegistry.Owner(id: ownerId)
+            let owner = ThreadRegistry.Owner(id: ownerId)
             guard registry.documentOwners[documentId]?.contains(owner) == true else { continue }
             let wasLast = registry.remove(documentId: documentId, group: nil, owner: owner)
             if wasLast { fullyRemoved.append(documentId) }
@@ -256,9 +256,9 @@ actor RegistryMutator {
     // MARK: - Access
 
     @discardableResult
-    func updateDocumentAccess(id: String, ownerId: String, access: TotemRegistry.Access) async -> Bool {
+    func updateDocumentAccess(id: String, ownerId: String, access: ThreadRegistry.Access) async -> Bool {
         var registry = await loadedRegistry()
-        guard registry.documentOwners[id]?.contains(TotemRegistry.Owner(id: ownerId)) == true else { return false }
+        guard registry.documentOwners[id]?.contains(ThreadRegistry.Owner(id: ownerId)) == true else { return false }
         registry.updateDocumentAccess(for: id, state: access)
         cache.update(registry)
         persistNow()
@@ -266,7 +266,7 @@ actor RegistryMutator {
     }
 
     @discardableResult
-    func updateGroupAccess(id: String, ownerId: String, access: TotemRegistry.Access) async -> Bool {
+    func updateGroupAccess(id: String, ownerId: String, access: ThreadRegistry.Access) async -> Bool {
         var registry = await loadedRegistry()
         guard registry.groupOwners[id]?.id == ownerId else { return false }
         registry.updateGroupAccess(for: id, state: access)
@@ -280,7 +280,7 @@ actor RegistryMutator {
     }
 
     /// Replaces the entire in-memory cache and checkpoints immediately.
-    func replace(with registry: TotemRegistry) {
+    func replace(with registry: ThreadRegistry) {
         cache.update(registry)
         persistNow()
     }
@@ -289,7 +289,7 @@ actor RegistryMutator {
     func updateGroup(_ group: Database.Group, documentId: String, ownerId: String) async -> Bool {
         let id = group.id
         var registry = await loadedRegistry()
-        let owner = TotemRegistry.Owner(id: ownerId)
+        let owner = ThreadRegistry.Owner(id: ownerId)
         guard registry.documentOwners[documentId]?.contains(owner) == true else { return false }
 
         let oldGroupId = registry.ownerDocumentGroup[ownerId]?[documentId]
@@ -340,7 +340,7 @@ actor RegistryMutator {
     @discardableResult
     func updateGroupMetadata(id: String, ownerId: OwnerID, metadata: Database.Group.Metadata) async -> Bool {
         var registry = await loadedRegistry()
-        let owner = TotemRegistry.Owner(id: ownerId)
+        let owner = ThreadRegistry.Owner(id: ownerId)
         guard registry.groupOwners[id]?.id == ownerId else { return false }
 
         var ownerGroups = registry.ownersGroups[owner] ?? []
@@ -357,7 +357,7 @@ actor RegistryMutator {
     @discardableResult
     func renameGroup(id: String, ownerId: String, label: String) async -> Bool {
         var registry = await loadedRegistry()
-        let owner = TotemRegistry.Owner(id: ownerId)
+        let owner = ThreadRegistry.Owner(id: ownerId)
         guard registry.groupOwners[id]?.id == ownerId else { return false }
 
         var ownerGroups = registry.ownersGroups[owner] ?? []
@@ -375,7 +375,7 @@ actor RegistryMutator {
     func removeGroupEntries(_ groupIds: [GroupID], ownerId: String) async {
         guard !groupIds.isEmpty else { return }
         var registry = await loadedRegistry()
-        let owner = TotemRegistry.Owner(id: ownerId)
+        let owner = ThreadRegistry.Owner(id: ownerId)
         for groupId in groupIds {
             guard registry.groupOwners[groupId]?.id == ownerId else { continue }
             registry.groups.removeValue(forKey: groupId)

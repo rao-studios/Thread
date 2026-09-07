@@ -8,7 +8,7 @@
 //    POST /v1/graph/entity/delete        {id}
 //    POST /v1/graph/entity/set-kind      {id, kind}
 //    POST /v1/graph/relationship/delete  {id}
-//    POST /v1/graph/re-extract           {document_id, totem: {owner_id}}
+//    POST /v1/graph/re-extract           {document_id, thread: {owner_id}}
 //    GET  /v1/graph/policy
 //    PUT  /v1/graph/policy               ExtractionPolicy JSON
 //
@@ -35,11 +35,11 @@ struct GraphRelationshipDeleteRequest: Codable {
 
 struct GraphReExtractRequest: Codable {
     let documentId: String
-    let totem: DatabaseRequest
+    let thread: DatabaseRequest
 
     enum CodingKeys: String, CodingKey {
         case documentId = "document_id"
-        case totem
+        case thread
     }
 }
 
@@ -68,7 +68,7 @@ extension ExtractionPolicy: ResponseCodable {}
 // MARK: - Routes
 
 func registerGraphAdminRoutes(
-    _ app: some RouterMethods<TotemRequestContext>,
+    _ app: some RouterMethods<ThreadRequestContext>,
     _ database: Database,
     embeddingModelProvider: any EmbeddingProviding,
     graphExtractor: any GraphExtracting
@@ -115,7 +115,7 @@ func registerGraphAdminRoutes(
             documentId: body.documentId,
             extractor: graphExtractor,
             embedder: embeddingModelProvider,
-            request: body.totem.withRequestID(context.id)
+            request: body.thread.withRequestID(context.id)
         )
         return GraphMutationResponse(success: count != nil, entityCount: count)
     }

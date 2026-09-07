@@ -1,6 +1,6 @@
 # API
 
-Totem's HTTP layer is the **standalone path**. In distributed mode, all production traffic flows through the gRPC session stream with Seer. The HTTP routes remain available for direct use and debugging in both modes.
+Thread's HTTP layer is the **standalone path**. In distributed mode, all production traffic flows through the gRPC session stream with Sewn. The HTTP routes remain available for direct use and debugging in both modes.
 
 ---
 
@@ -8,7 +8,7 @@ Totem's HTTP layer is the **standalone path**. In distributed mode, all producti
 
 ### `POST /health`
 
-Returns `{"status":"ok"}`. No auth required. Used by load balancers and Seer to verify liveness.
+Returns `{"status":"ok"}`. No auth required. Used by load balancers and Sewn to verify liveness.
 
 File: [Health.swift](../../Sources/API/Routes/Health.swift)
 
@@ -16,7 +16,7 @@ File: [Health.swift](../../Sources/API/Routes/Health.swift)
 
 ### `GET /v1/availability`
 
-Returns current storage availability state. Seer uses this to decide whether to route new index requests to this node.
+Returns current storage availability state. Sewn uses this to decide whether to route new index requests to this node.
 
 File: [Availability.swift](../../Sources/API/Routes/Availability.swift)
 
@@ -32,7 +32,7 @@ Indexes one or more documents. Each document's text is embedded and PQ-compresse
 {
   "inputs": ["A string, or...", ["array", "of", "strings"]],
   "sanitize": true,
-  "seer": {
+  "sewn": {
     "owner_id": "alice",
     "group": {
       "id": "my-group",
@@ -49,8 +49,8 @@ Indexes one or more documents. Each document's text is embedded and PQ-compresse
 | Field | Required | Description |
 |---|---|---|
 | `inputs` | Yes | One entry per document. String or array of strings. |
-| `seer.owner_id` | Yes | Identity of the caller. Lowercased on receipt. |
-| `seer.group` | No | Assigns all documents in this batch to a named group. |
+| `sewn.owner_id` | Yes | Identity of the caller. Lowercased on receipt. |
+| `sewn.group` | No | Assigns all documents in this batch to a named group. |
 | `sanitize` | No | When `true`, passes each input through `TextChunker`. Default: `false`. |
 | `tags` | No | Per-document tag hints. Outer index aligns 1:1 with `inputs`. Auto-generated if empty. |
 | `media_type` | No | `"text"` (default) or `"image"`. |
@@ -68,7 +68,7 @@ Searches indexed documents for the closest matching partitions to a query string
 ```json
 {
   "query": "how does product quantization work?",
-  "seer": {
+  "sewn": {
     "owner_id": "alice",
     "scope": "personal",
     "aggregate": false
@@ -79,11 +79,11 @@ Searches indexed documents for the closest matching partitions to a query string
 | Field | Required | Description |
 |---|---|---|
 | `query` | Yes | Natural language query. Embedded at search time. |
-| `seer.owner_id` | Yes | Scopes the search to this owner's documents. |
-| `seer.scope` | No | `personal` (default) or `global` (all `.available` documents). |
-| `seer.aggregate` | No | Also searches groups the owner has access to. |
-| `seer.group` / `seer.groups` | No | Restrict search to specific groups. |
-| `seer.tags` | No | Tag pre-filter — only partitions within tag embedding threshold are considered. |
+| `sewn.owner_id` | Yes | Scopes the search to this owner's documents. |
+| `sewn.scope` | No | `personal` (default) or `global` (all `.available` documents). |
+| `sewn.aggregate` | No | Also searches groups the owner has access to. |
+| `sewn.group` / `sewn.groups` | No | Restrict search to specific groups. |
+| `sewn.tags` | No | Tag pre-filter — only partitions within tag embedding threshold are considered. |
 
 **Response**
 
@@ -129,4 +129,4 @@ All HTTP models are in [Sources/API/Models/](../../Sources/API/Models/). They mi
 ## Notes
 
 - **No authentication.** `owner_id` is taken directly from the request body. Use a reverse proxy with bearer token enforcement if you expose this externally.
-- In distributed mode, the HTTP routes are secondary. Seer communicates with Totem exclusively via the gRPC session stream.
+- In distributed mode, the HTTP routes are secondary. Sewn communicates with Thread exclusively via the gRPC session stream.

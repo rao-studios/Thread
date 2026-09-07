@@ -109,7 +109,7 @@ enum ExtractionPolicyStore {
 
     static var current: ExtractionPolicy {
         if let policy = state.withLock({ $0 }) { return policy }
-        let logger = Logger(label: "totem-policy")
+        let logger = Logger(label: "thread-policy")
         let loaded: ExtractionPolicy = FilePersistence(key: key, kind: .basic, logger: logger)
             .restore() ?? ExtractionPolicy()
         state.withLock { $0 = loaded }

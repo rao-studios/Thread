@@ -43,7 +43,7 @@ struct PartitionTable: Codable {
                       entityIds: [EntityID] = [],
                       metadata: Data? = nil,
                       request: DatabaseRequest,
-                      logger: TotemLogger) {
+                      logger: ThreadLogger) {
         let valid = partitions.filter { !$0.embedding.isEmpty }
         guard !valid.isEmpty else {
             logger.warning(
@@ -77,10 +77,10 @@ struct PartitionTable: Codable {
                 expand: Bool = true,
                 k: Int = 3,
                 sinatra: Sinatra,
-                registry: TotemRegistry,
+                registry: ThreadRegistry,
                 request: DatabaseRequest,
                 metadataLoader: PartitionDataLoader? = nil,
-                logger: TotemLogger)
+                logger: ThreadLogger)
         -> (partitions: [PartitionSearchResult], adjustments: [SinatraAdjustment], trace: GraphSearchTrace?) {
 
         var aggregated: [PartitionSearchResult] = []
@@ -88,7 +88,7 @@ struct PartitionTable: Codable {
         let sinatraRegistry = sinatra.registry
         let startTime = Date()
 
-        let ownerKey = TotemRegistry.Owner(id: request.ownerId)
+        let ownerKey = ThreadRegistry.Owner(id: request.ownerId)
 
         var candidateIds: Set<DocumentID>
         var scopedIds: Set<DocumentID>?
@@ -214,10 +214,10 @@ struct PartitionTable: Codable {
                       k: Int,
                       sinatra: Sinatra,
                       sinatraRegistry: SinatraRegistry?,
-                      registry: TotemRegistry,
+                      registry: ThreadRegistry,
                       request: DatabaseRequest,
                       metadataLoader: PartitionDataLoader?,
-                      logger: TotemLogger) -> [(PartitionSearchResult, SinatraAdjustment?)] {
+                      logger: ThreadLogger) -> [(PartitionSearchResult, SinatraAdjustment?)] {
         let candidateArray = Array(candidateIds)
         var raw = [(PartitionSearchResult, SinatraAdjustment?)?](repeating: nil, count: candidateArray.count)
         let tableSnapshot = self

@@ -138,9 +138,9 @@ struct PartitionQuantizer: Codable {
     /// Batched MLX k-means runs on the GPU on Linux (CUDA build). On Darwin the
     /// vendored MLX cannot initialize (no metallib — any MLXArray creation
     /// aborts), so the CPU kernels are always used there.
-    /// Override with `TOTEM_PQ_MLX=1|0`.
+    /// Override with `THREAD_PQ_MLX=1|0`.
     static let mlxTrainEnabled: Bool = {
-        switch ProcessInfo.processInfo.environment["TOTEM_PQ_MLX"] {
+        switch ProcessInfo.processInfo.environment["THREAD_PQ_MLX"] {
         case "1": return true
         case "0": return false
         default:
@@ -154,9 +154,9 @@ struct PartitionQuantizer: Codable {
 
     /// Minimum `vectorCount × codebookSize` before the MLX path is worth its
     /// dispatch/transfer overhead; below this the CPU kernels win.
-    /// Override with `TOTEM_PQ_MLX_MIN_VK`.
+    /// Override with `THREAD_PQ_MLX_MIN_VK`.
     static let mlxMinVectorCentroidProduct: Int = {
-        ProcessInfo.processInfo.environment["TOTEM_PQ_MLX_MIN_VK"].flatMap(Int.init) ?? 4096
+        ProcessInfo.processInfo.environment["THREAD_PQ_MLX_MIN_VK"].flatMap(Int.init) ?? 4096
     }()
 
     // MARK: - Train

@@ -15,8 +15,8 @@ private func ownerColor(for id: String) -> Color {
     return ownerPalette[abs(h) % ownerPalette.count]
 }
 
-// Deterministic color for Totem node ID (different palette to distinguish from owner)
-private let totemPalette: [Color] = [
+// Deterministic color for Thread node ID (different palette to distinguish from owner)
+private let threadPalette: [Color] = [
     Color(red: 0.20, green: 0.60, blue: 0.86),
     Color(red: 0.10, green: 0.72, blue: 0.72),
     Color(red: 0.56, green: 0.36, blue: 0.82),
@@ -24,10 +24,10 @@ private let totemPalette: [Color] = [
     Color(red: 0.85, green: 0.52, blue: 0.15),
 ]
 
-private func totemColor(for id: String) -> Color {
+private func threadColor(for id: String) -> Color {
     var h: Int = 0
     for ch in id.unicodeScalars { h = 31 &* h &+ Int(ch.value) }
-    return totemPalette[abs(h) % totemPalette.count]
+    return threadPalette[abs(h) % threadPalette.count]
 }
 
 struct SearchResultCard: View {
@@ -38,10 +38,10 @@ struct SearchResultCard: View {
     @State private var appeared = false
 
     private var distanceColor: Color {
-        guard let d = result.distance else { return Color.seerInk.opacity(0.25) }
+        guard let d = result.distance else { return Color.sewnInk.opacity(0.25) }
         if d < 0.35 { return Color(red: 0.30, green: 0.69, blue: 0.31) }
-        if d < 0.65 { return Color.seerGold }
-        return Color.seerInk.opacity(0.35)
+        if d < 0.65 { return Color.sewnGold }
+        return Color.sewnInk.opacity(0.35)
     }
 
     private var shortOwnerId: String {
@@ -49,8 +49,8 @@ struct SearchResultCard: View {
         return id.isEmpty ? "unknown" : String(id.prefix(8))
     }
 
-    private var shortTotemId: String? {
-        guard let tid = result.totemId, !tid.isEmpty else { return nil }
+    private var shortThreadId: String? {
+        guard let tid = result.threadId, !tid.isEmpty else { return nil }
         return String(tid.prefix(8))
     }
 
@@ -61,8 +61,8 @@ struct SearchResultCard: View {
             // Header
             HStack(alignment: .center) {
                 Text("Result \(String(format: "%02d", index + 1))")
-                    .font(.seerSans(10, weight: .medium))
-                    .foregroundStyle(Color.seerInk.opacity(0.30))
+                    .font(.sewnSans(10, weight: .medium))
+                    .foregroundStyle(Color.sewnInk.opacity(0.30))
                     .tracking(0.8)
                     .textCase(.uppercase)
 
@@ -75,12 +75,12 @@ struct SearchResultCard: View {
                             .fill(distanceColor)
                             .frame(width: 6, height: 6)
                         Text(String(format: "%.4f", d))
-                            .font(.seerMono(9.5))
-                            .foregroundStyle(Color.seerInk.opacity(0.40))
+                            .font(.sewnMono(9.5))
+                            .foregroundStyle(Color.sewnInk.opacity(0.40))
                     }
                     .padding(.horizontal, 9)
                     .padding(.vertical, 4)
-                    .background(Color.seerFill)
+                    .background(Color.sewnFill)
                     .clipShape(Capsule())
                 }
             }
@@ -88,15 +88,15 @@ struct SearchResultCard: View {
 
             // Text excerpt
             Text(result.text)
-                .font(.seerSerif(16, weight: .light, italic: true))
-                .foregroundStyle(Color.seerInk.opacity(0.80))
+                .font(.sewnSerif(16, weight: .light, italic: true))
+                .foregroundStyle(Color.sewnInk.opacity(0.80))
                 .lineSpacing(5)
                 .lineLimit(7)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             // Divider
             Rectangle()
-                .fill(Color.seerInk.opacity(0.07))
+                .fill(Color.sewnInk.opacity(0.07))
                 .frame(height: 1)
                 .padding(.vertical, 14)
 
@@ -108,7 +108,7 @@ struct SearchResultCard: View {
                         .fill(accentColor)
                         .frame(width: 6, height: 6)
                     Text(shortOwnerId)
-                        .font(.seerSans(10, weight: .medium))
+                        .font(.sewnSans(10, weight: .medium))
                         .foregroundStyle(accentColor)
                         .tracking(0.5)
                 }
@@ -118,15 +118,15 @@ struct SearchResultCard: View {
                 .overlay(Capsule().strokeBorder(accentColor.opacity(0.22), lineWidth: 1))
                 .clipShape(Capsule())
 
-                // Totem node chip
-                if let shortTid = shortTotemId {
-                    let tColor = totemColor(for: result.totemId ?? "")
+                // Thread node chip
+                if let shortTid = shortThreadId {
+                    let tColor = threadColor(for: result.threadId ?? "")
                     HStack(spacing: 4) {
                         Image(systemName: "server.rack")
                             .font(.system(size: 7, weight: .medium))
                             .foregroundStyle(tColor)
                         Text(shortTid)
-                            .font(.seerMono(9))
+                            .font(.sewnMono(9))
                             .foregroundStyle(tColor)
                     }
                     .padding(.horizontal, 8)
@@ -139,11 +139,11 @@ struct SearchResultCard: View {
                 // Shard index badge
                 if let shard = result.shardIndex {
                     Text("shard \(shard)")
-                        .font(.seerMono(9))
-                        .foregroundStyle(Color.seerInk.opacity(0.28))
+                        .font(.sewnMono(9))
+                        .foregroundStyle(Color.sewnInk.opacity(0.28))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Color.seerFill)
+                        .background(Color.sewnFill)
                         .clipShape(Capsule())
                 }
 
@@ -151,8 +151,8 @@ struct SearchResultCard: View {
 
                 if !result.partitionId.isEmpty {
                     Text("p:\(result.partitionId.prefix(6))…")
-                        .font(.seerMono(9))
-                        .foregroundStyle(Color.seerInk.opacity(0.20))
+                        .font(.sewnMono(9))
+                        .foregroundStyle(Color.sewnInk.opacity(0.20))
                 }
             }
         }
@@ -164,12 +164,12 @@ struct SearchResultCard: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 20)
                         .strokeBorder(
-                            isHovered ? Color.seerGold.opacity(0.30) : Color.seerBorder,
+                            isHovered ? Color.sewnGold.opacity(0.30) : Color.sewnBorder,
                             lineWidth: 1
                         )
                 )
                 .shadow(
-                    color: isHovered ? Color.seerInk.opacity(0.10) : Color.seerInk.opacity(0.05),
+                    color: isHovered ? Color.sewnInk.opacity(0.10) : Color.sewnInk.opacity(0.05),
                     radius: isHovered ? 20 : 8, x: 0, y: isHovered ? 7 : 2
                 )
         )

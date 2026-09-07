@@ -5,7 +5,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var serverURL = ""
-    @State private var totemURL  = ""
+    @State private var threadURL  = ""
     @State private var ownerId   = ""
     @State private var email     = ""
     @State private var password  = ""
@@ -16,8 +16,8 @@ struct SettingsView: View {
             HStack(spacing: 10) {
                 DatabaseSpinningIcon(size: 28, cornerRadius: 7)
                 Text("Settings")
-                    .font(.seerSerif(20, weight: .medium))
-                    .foregroundStyle(Color.seerInk)
+                    .font(.sewnSerif(20, weight: .medium))
+                    .foregroundStyle(Color.sewnInk)
             }
             .padding(.bottom, 28)
 
@@ -28,20 +28,20 @@ struct SettingsView: View {
                 content: {
                     TextField("http://127.0.0.1:8080", text: $serverURL)
                         .textFieldStyle(.roundedBorder)
-                        .font(.seerMono(12))
+                        .font(.sewnMono(12))
                 }
             )
 
             Spacer().frame(height: 18)
 
-            // Totem URL
+            // Thread URL
             fieldGroup(
-                label: "Totem URL",
+                label: "Thread URL",
                 hint: "Vector node — handles embedding and indexing (default :8081).",
                 content: {
-                    TextField("http://127.0.0.1:8081", text: $totemURL)
+                    TextField("http://127.0.0.1:8081", text: $threadURL)
                         .textFieldStyle(.roundedBorder)
-                        .font(.seerMono(12))
+                        .font(.sewnMono(12))
                 }
             )
 
@@ -54,7 +54,7 @@ struct SettingsView: View {
                 content: {
                     TextField("database-demo", text: $ownerId)
                         .textFieldStyle(.roundedBorder)
-                        .font(.seerMono(12))
+                        .font(.sewnMono(12))
                         .disabled(appState.isSignedIn)
                         .opacity(appState.isSignedIn ? 0.5 : 1)
                 }
@@ -62,7 +62,7 @@ struct SettingsView: View {
 
             Spacer().frame(height: 18)
 
-            // Seer Account sign-in
+            // Sewn Account sign-in
             signInSection
 
             Spacer()
@@ -75,12 +75,12 @@ struct SettingsView: View {
                 ServerStatusDot(reachable: appState.serverReachable)
                 Button("Test Connection") {
                     appState.serverURL = serverURL
-                    appState.totemURL  = totemURL
+                    appState.threadURL  = threadURL
                     Task { await appState.checkHealth() }
                 }
-                .font(.seerSans(12))
+                .font(.sewnSans(12))
                 .buttonStyle(.plain)
-                .foregroundStyle(Color.seerGold)
+                .foregroundStyle(Color.sewnGold)
 
                 Spacer()
 
@@ -89,21 +89,21 @@ struct SettingsView: View {
 
                 Button("Save") {
                     appState.serverURL = serverURL
-                    appState.totemURL  = totemURL
+                    appState.threadURL  = threadURL
                     if !appState.isSignedIn { appState.ownerId = ownerId }
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .tint(Color.seerGold)
+                .tint(Color.sewnGold)
             }
         }
         .padding(28)
         .frame(width: 420, height: 500)
-        .background(Color.seerBG)
+        .background(Color.sewnBG)
         .onAppear {
             serverURL = appState.serverURL
-            totemURL  = appState.totemURL
+            threadURL  = appState.threadURL
             ownerId   = appState.ownerId
         }
     }
@@ -111,33 +111,33 @@ struct SettingsView: View {
     @ViewBuilder
     private var signInSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Seer Account")
-                .font(.seerSans(12, weight: .medium))
-                .foregroundStyle(Color.seerInk.opacity(0.60))
+            Text("Sewn Account")
+                .font(.sewnSans(12, weight: .medium))
+                .foregroundStyle(Color.sewnInk.opacity(0.60))
 
             if appState.isSignedIn {
                 HStack {
                     Text("Signed in as \(appState.ownerId)")
-                        .font(.seerMono(12))
-                        .foregroundStyle(Color.seerInk.opacity(0.70))
+                        .font(.sewnMono(12))
+                        .foregroundStyle(Color.sewnInk.opacity(0.70))
                     Spacer()
                     Button("Sign Out") {
                         appState.signOut()
                         ownerId = appState.ownerId
                     }
-                    .font(.seerSans(12))
+                    .font(.sewnSans(12))
                     .buttonStyle(.plain)
-                    .foregroundStyle(Color.seerGold)
+                    .foregroundStyle(Color.sewnGold)
                 }
             } else {
                 TextField("Email", text: $email)
                     .textFieldStyle(.roundedBorder)
-                    .font(.seerMono(12))
+                    .font(.sewnMono(12))
                     .textContentType(.emailAddress)
 
                 SecureField("Password", text: $password)
                     .textFieldStyle(.roundedBorder)
-                    .font(.seerMono(12))
+                    .font(.sewnMono(12))
 
                 HStack {
                     if appState.isSigningIn {
@@ -150,22 +150,22 @@ struct SettingsView: View {
                             ownerId = appState.ownerId
                         }
                     }
-                    .font(.seerSans(12))
+                    .font(.sewnSans(12))
                     .buttonStyle(.plain)
-                    .foregroundStyle(Color.seerGold)
+                    .foregroundStyle(Color.sewnGold)
                     .disabled(email.isEmpty || password.isEmpty || appState.isSigningIn)
 
                     if let err = appState.signInError {
                         Spacer()
                         Text(err)
-                            .font(.seerSans(11))
+                            .font(.sewnSans(11))
                             .foregroundStyle(.red)
                             .lineLimit(1)
                     }
                 }
                 Text("Sign in to track costs and index under your account ID.")
-                    .font(.seerSans(11))
-                    .foregroundStyle(Color.seerInk.opacity(0.30))
+                    .font(.sewnSans(11))
+                    .foregroundStyle(Color.sewnInk.opacity(0.30))
             }
         }
     }
@@ -178,12 +178,12 @@ struct SettingsView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
-                .font(.seerSans(12, weight: .medium))
-                .foregroundStyle(Color.seerInk.opacity(0.60))
+                .font(.sewnSans(12, weight: .medium))
+                .foregroundStyle(Color.sewnInk.opacity(0.60))
             content()
             Text(hint)
-                .font(.seerSans(11))
-                .foregroundStyle(Color.seerInk.opacity(0.30))
+                .font(.sewnSans(11))
+                .foregroundStyle(Color.sewnInk.opacity(0.30))
         }
     }
 }

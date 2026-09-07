@@ -17,7 +17,7 @@ import Logging
 /// runtime handles the hop.
 ///
 /// One `PersistenceActor` is created per logical file:
-///   - `TotemCache<Value>` owns one each for the table, graph, and registry.
+///   - `ThreadCache<Value>` owns one each for the table, graph, and registry.
 actor PersistenceActor {
     private let persistence: FilePersistence
 

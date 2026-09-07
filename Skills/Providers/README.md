@@ -1,6 +1,6 @@
 # Providers
 
-Totem supports two embedding backends, selected at startup via `--use-mlx`. Both produce 1024-dimensional float32 vectors.
+Thread supports two embedding backends, selected at startup via `--use-mlx`. Both produce 1024-dimensional float32 vectors.
 
 ---
 
@@ -41,13 +41,13 @@ protocol EmbeddingModelProvider {
 }
 ```
 
-To add a new backend: implement the protocol and wire it into `TotemServer.swift` as an alternative to the two existing providers.
+To add a new backend: implement the protocol and wire it into `ThreadServer.swift` as an alternative to the two existing providers.
 
 ---
 
 ## Tag Embeddings
 
-The same provider used for document partitions is also used to embed the auto-generated or supplied `tags` array. Tag embeddings are stored separately in `PartitionIndex` and used as a pre-filter during search when `seer.tags` is set.
+The same provider used for document partitions is also used to embed the auto-generated or supplied `tags` array. Tag embeddings are stored separately in `PartitionIndex` and used as a pre-filter during search when `sewn.tags` is set.
 
 ---
 

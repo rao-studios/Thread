@@ -1,6 +1,6 @@
 # MLX on Linux with CUDA — Build & Runtime Field Notes
 
-Full record of every patch, fork, commit hash, and runtime quirk required to run Totem with on-device MLX embeddings on Ubuntu 24.04 + CUDA 12.9 (RTX 3090, sm_86). Intended as a living reference for re-applying changes when syncing forks against upstream.
+Full record of every patch, fork, commit hash, and runtime quirk required to run Thread with on-device MLX embeddings on Ubuntu 24.04 + CUDA 12.9 (RTX 3090, sm_86). Intended as a living reference for re-applying changes when syncing forks against upstream.
 
 ---
 
@@ -29,7 +29,7 @@ All patches live on these forks/branches. `swift package update` advances the re
 | `riteshpakala/mlx-swift-lm` | `main` | MLX LM — CGSize stub, AVFoundation guards | `c25e0bd` |
 | `riteshpakala/mlx.embeddings` | `main` | Embedding models — dependency pointers | `4f664d9` |
 
-`Totem/Package.swift` pins all of these. The mlx C++ library is a git submodule inside `mlx-swift`; SwiftPM initialises it automatically via `.gitmodules`.
+`Thread/Package.swift` pins all of these. The mlx C++ library is a git submodule inside `mlx-swift`; SwiftPM initialises it automatically via `.gitmodules`.
 
 ---
 
@@ -79,7 +79,7 @@ All patches live on these forks/branches. `swift package update` advances the re
 |---|---|
 | `4f664d9` | Point mlx-swift dependency to gab/cuda1 branch |
 
-### Totem — hummingbird
+### Thread — hummingbird
 
 | Hash | What |
 |---|---|
@@ -109,7 +109,7 @@ swift build -c debug --jobs 2   # or -c release
 Run with the MLX backend:
 
 ```bash
-.build/debug/totem --host 127.0.0.1 --port 8080 --use-mlx
+.build/debug/thread --host 127.0.0.1 --port 8080 --use-mlx
 ```
 
 ---
@@ -271,7 +271,7 @@ Each was replaced with `#if canImport(Darwin)` guards or Linux-compatible equiva
 
 **Root cause:** Swift actors serialise synchronous sections but suspend at `await`, allowing another caller to enter. Between the nil-check and the assignment of `loadedContainer`, any number of suspended tasks can wake up and see nil.
 
-**Fix (`1de9e99` in Totem):** Store a `loadingTask: Task<ModelContainer, Error>?`. On first call, create the Task and save it before awaiting. Subsequent callers check `loadingTask` first and `await task.value` on the same Task — they share the result, never start a second load.
+**Fix (`1de9e99` in Thread):** Store a `loadingTask: Task<ModelContainer, Error>?`. On first call, create the Task and save it before awaiting. Subsequent callers check `loadingTask` first and `await task.value` on the same Task — they share the result, never start a second load.
 
 ```swift
 private func loadedModel(logger: Logger) async throws -> ModelContainer {
@@ -310,7 +310,7 @@ private func loadedModel(logger: Logger) async throws -> ModelContainer {
 
 **Root cause:** `maxInputsPerBatch = 256` sent all partitions through the model in one shot. MLX builds a lazy computation graph — the entire graph (activations × layers × dequantized weight temps) is materialised at once before a single result is read.
 
-**Fix (Totem `MLXEmbeddingModelProvider.swift`):**
+**Fix (Thread `MLXEmbeddingModelProvider.swift`):**
 - Reduced `maxInputsPerBatch` from 256 → 16. For 150 partitions this produces ~10 sub-batches.
 - Added `MLX.eval(embeddings)` after model forward pass to force synchronous GPU execution before moving to the next sub-batch. Without this, MLX defers execution and all sub-batches' graphs queue up simultaneously.
 - Added `MLX.Memory.clearCache()` after reading each sub-batch's results to immediately free dequantized-weight temporaries and activation buffers before the next sub-batch's allocation.
@@ -352,7 +352,7 @@ auto& sdpa_cache() {
 }
 ```
 
-**Belt-and-suspenders (Totem `MLXEmbeddingModelProvider.init`):** Also calls `setenv("MLX_CUDA_SDPA_CACHE_SIZE", "2048", 0)` (the `0` means do not overwrite if the user set a larger value) before any MLX operation runs, so the override also works even if the fork is temporarily out of date.
+**Belt-and-suspenders (Thread `MLXEmbeddingModelProvider.init`):** Also calls `setenv("MLX_CUDA_SDPA_CACHE_SIZE", "2048", 0)` (the `0` means do not overwrite if the user set a larger value) before any MLX operation runs, so the override also works even if the fork is temporarily out of date.
 
 **Power-of-2 sequence padding:** To further reduce the number of distinct SDPA shapes, sequence lengths within each sub-batch are padded to the next power of 2:
 

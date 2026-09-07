@@ -6,7 +6,7 @@ struct HealthResponse: ResponseCodable {
     let timestamp: String
 }
 
-func registerHealthRoute(_ app: some RouterMethods<TotemRequestContext>) {
+func registerHealthRoute(_ app: some RouterMethods<ThreadRequestContext>) {
     app.get("/health") { _, _ async throws -> HealthResponse in
         return HealthResponse(
             status: "healthy",

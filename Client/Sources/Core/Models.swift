@@ -55,6 +55,6 @@ struct SearchResult: Identifiable {
     let partitionId: String
     let ownerId: String
     let distance: Float?
-    let totemId: String?
+    let threadId: String?
     let shardIndex: Int?
 }

@@ -20,7 +20,7 @@ struct LibraryResponse: ResponseCodable {
     let groups: [Database.Group]
 }
 
-func registerLibraryRoute(_ app: some RouterMethods<TotemRequestContext>, _ database: Database) {
+func registerLibraryRoute(_ app: some RouterMethods<ThreadRequestContext>, _ database: Database) {
     app.post("/v1/library") { request, context async throws -> LibraryResponse in
         let body = try await request.decode(as: LibraryRequest.self, context: context)
         var groups = database.groups(for: body.ownerId)

@@ -11,7 +11,7 @@ struct ContentView: View {
             SearchView()
                 .frame(minWidth: 440)
         }
-        .background(Color.seerBG)
+        .background(Color.sewnBG)
         .environmentObject(appState)
         .task { await appState.checkHealth() }
     }

@@ -3,7 +3,7 @@ import Foundation
 /// A knowledge-graph query: resolve entities by name and relationships by semantic similarity, then traverse
 /// up to `hops` edges. At least one of `entity` / `query` must be present.
 struct GraphRequest: Codable {
-    let totem: DatabaseRequest
+    let thread: DatabaseRequest
     /// Entity name lookup (token containment).
     let entity: String?
     /// Free-text query embedded for relationship and predicate matching.
@@ -18,7 +18,7 @@ struct GraphRequest: Codable {
     let includeDocuments: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case totem
+        case thread
         case entity
         case query
         case kinds

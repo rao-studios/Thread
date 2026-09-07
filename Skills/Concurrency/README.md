@@ -1,6 +1,6 @@
 # Concurrency
 
-Totem uses Swift actors throughout. All mutable state lives inside the `Database` actor. Writes to the partition table and registry are further serialized through dedicated mutators.
+Thread uses Swift actors throughout. All mutable state lives inside the `Database` actor. Writes to the partition table and registry are further serialized through dedicated mutators.
 
 ---
 
@@ -8,7 +8,7 @@ Totem uses Swift actors throughout. All mutable state lives inside the `Database
 
 `Database` is the root actor. It:
 
-- Owns `TotemRegistry`, `PartitionTable`, and the `GraphStore`.
+- Owns `ThreadRegistry`, `PartitionTable`, and the `GraphStore`.
 - Serializes all reads and writes through its executor.
 - Restores plist snapshots and runs reconciliation sweeps on startup before serving any requests.
 - Exposes async methods used by gRPC service impls and HTTP route handlers.
@@ -17,7 +17,7 @@ Totem uses Swift actors throughout. All mutable state lives inside the `Database
 
 ## RegistryMutator
 
-`RegistryMutator` serializes all writes to `TotemRegistry`.
+`RegistryMutator` serializes all writes to `ThreadRegistry`.
 
 Every registry mutation (register, linkOwner, updateAccess) goes through this mutator. Hot-path mutations schedule a debounced snapshot; cold-path mutations persist immediately.
 
@@ -45,13 +45,13 @@ Both are defined in [Utilities/Database/](../../Sources/Utilities/Database/).
 
 ---
 
-## TotemCache / DocumentCache
+## ThreadCache / DocumentCache
 
-`TotemCache` — an LRU-evicting in-memory cache for recently accessed search results and intermediate data.
+`ThreadCache` — an LRU-evicting in-memory cache for recently accessed search results and intermediate data.
 
 `DocumentCache` — per-document cache layer that sits in front of `PartitionIndex` reads. Avoids redundant disk access for hot documents.
 
-Files: [TotemCache.swift](../../Sources/Utilities/Database/TotemCache.swift), [DocumentCache.swift](../../Sources/Utilities/Database/DocumentCache.swift)
+Files: [ThreadCache.swift](../../Sources/Utilities/Database/ThreadCache.swift), [DocumentCache.swift](../../Sources/Utilities/Database/DocumentCache.swift)
 
 ---
 
@@ -63,6 +63,6 @@ Files: [TotemCache.swift](../../Sources/Utilities/Database/TotemCache.swift), [D
 
 ## Rules
 
-- Never mutate `PartitionTable` or `TotemRegistry` directly — always go through the matching mutator.
+- Never mutate `PartitionTable` or `ThreadRegistry` directly — always go through the matching mutator.
 - Never bypass the mutators. Direct cache writes race with the debounced saves and can be lost on restart.
 - Use `ReadWriteValue` for cache-like state; use `LockedValue` for small critical sections; use actor isolation for everything owned by `Database`.

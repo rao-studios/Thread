@@ -53,14 +53,14 @@ extension Database {
         var id: String
         var partitionId: String
         var ownerId: String
-        var totemId: String? = nil
+        var threadId: String? = nil
         var shardIndex: Int? = nil
 
         enum CodingKeys: String, CodingKey {
             case id
             case partitionId = "partition_id"
             case ownerId     = "owner_id"
-            case totemId     = "totem_id"
+            case threadId     = "thread_id"
             case shardIndex  = "shard_index"
         }
     }

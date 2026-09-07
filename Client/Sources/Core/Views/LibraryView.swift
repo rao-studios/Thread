@@ -13,12 +13,12 @@ struct LibraryView: View {
 
     var body: some View {
         ZStack {
-            Color.seerBG.ignoresSafeArea()
+            Color.sewnBG.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 toolbar
                 Divider()
-                    .background(Color.seerBorder)
+                    .background(Color.sewnBorder)
 
                 if hasItems {
                     fileGrid
@@ -64,8 +64,8 @@ struct LibraryView: View {
             DatabaseSpinningIcon(size: 22, cornerRadius: 5)
 
             Text("Library")
-                .font(.seerSerif(15, weight: .medium))
-                .foregroundStyle(Color.seerInk)
+                .font(.sewnSerif(15, weight: .medium))
+                .foregroundStyle(Color.sewnInk)
 
             Spacer()
 
@@ -77,14 +77,14 @@ struct LibraryView: View {
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 11))
-                    .foregroundStyle(Color.seerInk.opacity(0.35))
+                    .foregroundStyle(Color.sewnInk.opacity(0.35))
             }
             .buttonStyle(.plain)
             .help("Refresh connection")
 
             Divider()
                 .frame(height: 16)
-                .background(Color.seerBorder)
+                .background(Color.sewnBorder)
 
             // Upload
             Button {
@@ -94,11 +94,11 @@ struct LibraryView: View {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 12))
                     Text("Upload")
-                        .font(.seerSans(12, weight: .medium))
+                        .font(.sewnSans(12, weight: .medium))
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Color.seerGold)
+                .background(Color.sewnGold)
                 .foregroundStyle(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 7))
             }
@@ -110,7 +110,7 @@ struct LibraryView: View {
             } label: {
                 Image(systemName: "gearshape")
                     .font(.system(size: 13))
-                    .foregroundStyle(Color.seerInk.opacity(0.30))
+                    .foregroundStyle(Color.sewnInk.opacity(0.30))
             }
             .buttonStyle(.plain)
             .help("Settings")
@@ -148,16 +148,16 @@ struct LibraryView: View {
 
             Image(systemName: "folder")
                 .font(.system(size: 46, weight: .ultraLight))
-                .foregroundStyle(Color.seerGold.opacity(0.30))
+                .foregroundStyle(Color.sewnGold.opacity(0.30))
 
             VStack(spacing: 8) {
                 Text("No documents yet")
-                    .font(.seerSerif(19))
-                    .foregroundStyle(Color.seerInk.opacity(0.55))
+                    .font(.sewnSerif(19))
+                    .foregroundStyle(Color.sewnInk.opacity(0.55))
 
                 Text("Drag files here or click Upload\nto embed documents for search")
-                    .font(.seerSans(12))
-                    .foregroundStyle(Color.seerInk.opacity(0.30))
+                    .font(.sewnSans(12))
+                    .foregroundStyle(Color.sewnInk.opacity(0.30))
                     .multilineTextAlignment(.center)
             }
 
@@ -168,10 +168,10 @@ struct LibraryView: View {
                     Image(systemName: "arrow.up.circle")
                     Text("Upload Files")
                 }
-                .font(.seerSans(13, weight: .medium))
+                .font(.sewnSans(13, weight: .medium))
                 .padding(.horizontal, 20)
                 .padding(.vertical, 9)
-                .background(Color.seerGold)
+                .background(Color.sewnGold)
                 .foregroundStyle(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 9))
             }
@@ -181,8 +181,8 @@ struct LibraryView: View {
             Spacer()
 
             Text("Supported: txt · md · pdf · html · json · csv · rtf · code")
-                .font(.seerSans(10))
-                .foregroundStyle(Color.seerInk.opacity(0.20))
+                .font(.sewnSans(10))
+                .foregroundStyle(Color.sewnInk.opacity(0.20))
                 .padding(.bottom, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -193,12 +193,12 @@ struct LibraryView: View {
 
     private var dropOverlay: some View {
         ZStack {
-            Color.seerGold.opacity(0.04)
+            Color.sewnGold.opacity(0.04)
                 .ignoresSafeArea()
 
             RoundedRectangle(cornerRadius: 14)
                 .strokeBorder(
-                    Color.seerGold.opacity(0.65),
+                    Color.sewnGold.opacity(0.65),
                     style: StrokeStyle(lineWidth: 2, dash: [9, 5])
                 )
                 .padding(14)
@@ -206,15 +206,15 @@ struct LibraryView: View {
             VStack(spacing: 8) {
                 Image(systemName: "arrow.down.circle")
                     .font(.system(size: 28, weight: .ultraLight))
-                    .foregroundStyle(Color.seerGold.opacity(0.80))
+                    .foregroundStyle(Color.sewnGold.opacity(0.80))
 
                 Text("Drop to upload")
-                    .font(.seerSerif(22))
-                    .foregroundStyle(Color.seerGold.opacity(0.85))
+                    .font(.sewnSerif(22))
+                    .foregroundStyle(Color.sewnGold.opacity(0.85))
 
                 Text("Files will be processed and embedded")
-                    .font(.seerSans(12))
-                    .foregroundStyle(Color.seerGold.opacity(0.50))
+                    .font(.sewnSans(12))
+                    .foregroundStyle(Color.sewnGold.opacity(0.50))
             }
         }
         .allowsHitTesting(false)

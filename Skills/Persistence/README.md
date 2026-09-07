@@ -1,6 +1,6 @@
 # Persistence
 
-Totem persists all state as binary property-list snapshots under `totem-db/`. There is no WAL and no memory-mapped store — durability is debounced full-file saves with startup reconciliation sweeps.
+Thread persists all state as binary property-list snapshots under `thread-db/`. There is no WAL and no memory-mapped store — durability is debounced full-file saves with startup reconciliation sweeps.
 
 ---
 
@@ -10,7 +10,7 @@ Totem persists all state as binary property-list snapshots under `totem-db/`. Th
 |---|---|
 | `table-<nodeId>` | `PartitionTable` — PQ codebooks, lean slots, entity linkage |
 | `graph-<nodeId>` | `GraphStore` — entities + relationships (adjacency rebuilt on decode) |
-| `registry` | `TotemRegistry` — ownership, groups, access, stats |
+| `registry` | `ThreadRegistry` — ownership, groups, access, stats |
 | `documents/{id}` | `Database.Document` |
 | `documents/{id}-parts` | `[PartitionData]` — partition text/url/owner, loaded on demand |
 | `node-id` | Persisted node UUID |
@@ -48,5 +48,5 @@ Snapshot files are created under the app documents directory (`FilePersistence.g
 |---|---|
 | [FilePersistence.swift](../../Sources/Utilities/Persistence/FilePersistence.swift) | Plist encode/decode, atomic writes, purge |
 | [PersistenceActor.swift](../../Sources/Utilities/Persistence/PersistenceActor.swift) | Actor wrapper for file I/O serialization |
-| [TotemCache.swift](../../Sources/Utilities/Database/TotemCache.swift) | Lock-protected snapshot + serialized saves |
-| [NodeIdentity.swift](../../Sources/Utilities/Persistence/NodeIdentity.swift) | Stable per-process node UUID (used in Seer registration) |
+| [ThreadCache.swift](../../Sources/Utilities/Database/ThreadCache.swift) | Lock-protected snapshot + serialized saves |
+| [NodeIdentity.swift](../../Sources/Utilities/Persistence/NodeIdentity.swift) | Stable per-process node UUID (used in Sewn registration) |

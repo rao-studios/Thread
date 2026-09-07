@@ -12,7 +12,7 @@ typealias GroupID = String
 typealias OwnerID = String
 
 /// Registry for owners and their documents.
-struct TotemRegistry: Codable {
+struct ThreadRegistry: Codable {
     // All documents under a owner.
     var ownersDocuments: [Owner : [DocumentID]] = [:]
     // All owners of a document (one-to-many CID ownership).
@@ -94,7 +94,7 @@ struct TotemRegistry: Codable {
     init() {}
 }
 
-extension TotemRegistry {
+extension ThreadRegistry {
     struct Owner: Codable, Hashable {
         let id: String
     }
@@ -102,7 +102,7 @@ extension TotemRegistry {
 
 // MARK: - Modifications
 
-extension TotemRegistry {
+extension ThreadRegistry {
     /// Removes an orphaned DocumentID — one whose file is missing on disk — from all
     /// registry collections without requiring a pre-fetched owner or group object.
     /// Safe to call during startup before the document cache is populated.
@@ -222,7 +222,7 @@ extension TotemRegistry {
 
 // MARK: - Document Stats
 
-extension TotemRegistry {
+extension ThreadRegistry {
     /// Returns the stats for a given document, or a zero-value default if absent.
     func stats(for documentId: DocumentID) -> Database.DocumentStats {
         documentStats[documentId] ?? .init(id: documentId)
@@ -269,7 +269,7 @@ extension TotemRegistry {
 
 // MARK: - Access
 
-extension TotemRegistry {
+extension ThreadRegistry {
     enum Access: String, Codable {
         case available
         case restricted
@@ -307,7 +307,7 @@ extension TotemRegistry {
     }
 }
 
-extension TotemRegistry {
+extension ThreadRegistry {
     func getGroupAccess(_ id: GroupID) -> Access {
         groupAccess[id] ?? .unknown
     }
@@ -333,7 +333,7 @@ private func sortedGroupInsert(_ group: Database.Group, into list: inout [Databa
     list.insert(group, at: lo)
 }
 
-extension TotemRegistry {
+extension ThreadRegistry {
     /// Returns a `Database.Group` for a document using the first group in the Set index.
     /// Prefer `ownerDocumentGroup[ownerId]?[documentId]` for owner-scoped lookups.
     func group(for documentId: DocumentID) -> Database.Group? {
@@ -345,7 +345,7 @@ extension TotemRegistry {
 
 // MARK: - WAL-replayable mutations
 
-extension TotemRegistry {
+extension ThreadRegistry {
     /// Registers `documentId` under `ownerId` with an optional group association.
     ///
     /// Extracted from `RegistryMutator.register` so the same logic is used both

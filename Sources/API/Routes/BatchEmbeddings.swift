@@ -31,16 +31,16 @@ private func elementAt<T>(_ array: [T]?, _ index: Int) -> T? {
 }
 
 func registerBatchEmbeddingsRoute(
-    _ app: some RouterMethods<TotemRequestContext>,
+    _ app: some RouterMethods<ThreadRequestContext>,
     _ database: Database,
     embeddingModelProvider: some EmbeddingProviding,
     graphExtractor: any GraphExtracting
 ) {
     app.post("/v1/batch/embeddings") { request, context async throws -> EmbeddingBatchResponse in
         let embeddingRequest = try await request.decode(as: EmbeddingBatchRequest.self, context: context)
-        let baseReq = embeddingRequest.totem.withRequestID(context.id)
+        let baseReq = embeddingRequest.thread.withRequestID(context.id)
         let databaseReq: DatabaseRequest = baseReq.ownerId.isEmpty
-            ? DatabaseRequest(ownerId: "\(database.nodeId.uuidString)-totem", group: baseReq.group, groups: baseReq.groups, entities: baseReq.entities, tags: baseReq.tags, aggregate: baseReq.aggregate, scope: baseReq.scope, requestID: baseReq.requestID)
+            ? DatabaseRequest(ownerId: "\(database.nodeId.uuidString)-thread", group: baseReq.group, groups: baseReq.groups, entities: baseReq.entities, tags: baseReq.tags, aggregate: baseReq.aggregate, scope: baseReq.scope, requestID: baseReq.requestID)
             : baseReq
         let logger = database.logger
         let embeddingReqId = "emb-\(UUID().uuidString)"
@@ -52,7 +52,7 @@ func registerBatchEmbeddingsRoute(
 
         logger.info(
             "Batch Embedding",
-            "Received batch embedding request (ID: \(embeddingReqId)) for model: \(embeddingRequest.model ?? "Default") | group: \(embeddingRequest.totem.group?.id ?? "") | ip: \(ipAddress)",
+            "Received batch embedding request (ID: \(embeddingReqId)) for model: \(embeddingRequest.model ?? "Default") | group: \(embeddingRequest.thread.group?.id ?? "") | ip: \(ipAddress)",
             service: .embedding
         )
 

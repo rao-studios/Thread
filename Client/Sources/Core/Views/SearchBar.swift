@@ -20,14 +20,14 @@ struct SearchBar: View {
             // Search icon
             Image(systemName: "magnifyingglass")
                 .font(.system(size: compact ? 14 : 17, weight: .light))
-                .foregroundStyle(focused ? Color.seerGold : Color.seerInk.opacity(0.35))
+                .foregroundStyle(focused ? Color.sewnGold : Color.sewnInk.opacity(0.35))
                 .animation(.easeInOut(duration: 0.2), value: focused)
 
             // Text input
             TextField("Search the world…", text: $query)
                 .textFieldStyle(.plain)
-                .font(.seerSerif(compact ? 15 : 19, weight: .light, italic: true))
-                .foregroundStyle(Color.seerInk)
+                .font(.sewnSerif(compact ? 15 : 19, weight: .light, italic: true))
+                .foregroundStyle(Color.sewnInk)
                 .focused($focused)
                 .onSubmit { submitQuery() }
 
@@ -36,7 +36,7 @@ struct SearchBar: View {
                 if loading {
                     ProgressView()
                         .scaleEffect(0.75)
-                        .tint(Color.seerGold)
+                        .tint(Color.sewnGold)
                         .frame(width: 22, height: 22)
                 } else if !query.isEmpty {
                     submitButton
@@ -54,12 +54,12 @@ struct SearchBar: View {
                 .overlay(
                     Capsule()
                         .strokeBorder(
-                            focused ? Color.seerGold.opacity(0.70) : Color.seerBorder,
+                            focused ? Color.sewnGold.opacity(0.70) : Color.sewnBorder,
                             lineWidth: 1
                         )
                 )
                 .shadow(
-                    color: focused ? Color.seerGold.opacity(0.15) : Color.seerInk.opacity(0.07),
+                    color: focused ? Color.sewnGold.opacity(0.15) : Color.sewnInk.opacity(0.07),
                     radius: focused ? 10 : 4, x: 0, y: focused ? 3 : 2
                 )
         )
@@ -72,12 +72,12 @@ struct SearchBar: View {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [Color.seerGold, Color.seerGold.opacity(0.70)],
+                            colors: [Color.sewnGold, Color.sewnGold.opacity(0.70)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
-                    .shadow(color: Color.seerGold.opacity(0.30), radius: 4, x: 0, y: 2)
+                    .shadow(color: Color.sewnGold.opacity(0.30), radius: 4, x: 0, y: 2)
                 Image(systemName: "arrow.right")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.white)
