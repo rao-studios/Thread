@@ -1,16 +1,97 @@
 # Thread
 
-<p align="center">
-  <a href="Demo/README.md">
-    <img src="README_Assets/1.png" alt="SewnDemo — Library and Search" width="720" />
-  </a>
-</p>
+Thread is a distributed vector search and knowledge-graph node for [Sewn](https://github.com/rao-studios/Sewn). It runs standalone as a single binary, or as one node in a fleet that a Sewn mothership fans queries across.
 
-Thread is a distributed vector search node for [Sewn](https://github.com/rao-studios/Seer). In standalone mode it exposes HTTP routes for direct use. In distributed mode it connects to a Sewn mothership over gRPC, registers itself, and serves all search and index traffic through a persistent bidirectional session stream.
+## Introduction
+
+Thread is a **memory node**. You give it text; it gives back the passages that
+answer a question — and the entities those passages are about.
+
+Every document that arrives is chunked into partitions, embedded to 1024
+dimensions, compressed with product quantization, and folded into a knowledge
+graph of entities and relationships. A query runs against both halves at once:
+the graph narrows the field, a quantized distance scan ranks what survives, and
+a one-hop graph expansion pulls in documents the vectors alone would have
+missed. Documents are content-addressed by a SHA-256 of their text, so the same
+passage submitted twice is embedded once and stored once.
+
+What that buys you, concretely:
+
+| | |
+|---|---|
+| **Hybrid retrieval** | Knowledge graph *and* vector search in one query, not a graph bolted onto a vector store after the fact. |
+| **Compressed by default** | Product quantization means a scan touches integer codes, not 4 KB float vectors — millions of partitions without loading them. |
+| **On-device or hosted** | Embeddings and graph extraction run locally through MLX (Apple Silicon or CUDA) or through the Mistral API. No key needed for the local path. |
+| **Deduplicated** | Content addressing collapses duplicate text across owners to one copy of the vectors. |
+| **Owned, not rented** | A single binary writing plist snapshots to a directory you name. No database to run, no service to sign up for. |
+
+Thread deliberately stops short of a few things. It has **no authentication** —
+`owner_id` is whatever the caller says it is — and it holds no user sessions.
+Access control is a two-value flag (`restricted` / `available`) enforced per
+document, not an identity system. That is Sewn's job in a full deployment, or
+your reverse proxy's in a standalone one.
+
+It runs in one of two shapes:
+
+```mermaid
+flowchart LR
+    subgraph standalone["Standalone — one node, no coordinator"]
+        direction TB
+        C1["Your client"] -->|"HTTP :8080"| T1["Thread"]
+        T1 --> D1[("thread-db")]
+    end
+
+    subgraph distributed["Distributed — a fleet behind Sewn"]
+        direction TB
+        C2["Your client"] --> S["Sewn<br/>mothership"]
+        S -.->|"fan-out over<br/>one session stream"| N1["Thread A"]
+        S -.-> N2["Thread B"]
+        S -.-> N3["Thread C"]
+        N1 --> DB1[("db")]
+        N2 --> DB2[("db")]
+        N3 --> DB3[("db")]
+    end
+
+    standalone ~~~ distributed
+```
+
+In distributed mode **Thread dials Sewn**, not the other way round: the node
+registers itself, then holds a bidirectional stream open and serves requests
+that arrive down it. A node behind NAT needs no inbound port. The HTTP routes
+stay live in both shapes for direct use and debugging.
+
+### Part of MaryOS
+
+Thread was built for **MaryOS**, Rao Studios' ambient-computing stack, and that
+is where its shape comes from. MaryOS puts an assistant on hardware you own and
+keeps what she learns there; Thread is the part that remembers. The design
+choices above all follow from that brief — on-device embeddings because memory
+should not have to leave the machine, content addressing because the same
+passage arrives from a dozen places, a knowledge graph because *"what do you
+know about me?"* is a question about entities, not cosine distance.
+
+The stack is a set of independent Swift packages, each usable on its own:
+
+| Repository | Role |
+|---|---|
+| [Mary](https://github.com/rao-studios/Mary) | The macOS assistant — screen perception through the accessibility tree, voice, declarative Plugins. Thread is her only durable memory. |
+| [Sewn](https://github.com/rao-studios/Sewn) | The mothership — authentication, conversation and RAG pipelines, and fan-out across every registered Thread node. |
+| **Thread** | *This repository.* The memory node: vector storage, knowledge graph, retrieval. |
+| [Fleet](https://github.com/rao-studios/Fleet) | Trains LoRA adapters on real turns pulled back out of Thread, so small on-device models emit a fixed schema. |
+| [Conduit](https://github.com/rao-studios/Conduit) | The wire — one canonical set of `.proto` files and the session machinery every mothership and node links against. |
+| [Frigate](https://github.com/rao-studios/Frigate) | The self-contained MLX stack behind Thread's on-device embeddings and graph extraction. |
+| [MaryUI](https://github.com/rao-studios/MaryUI) | The desktop design system, theme *Liquid Platinum*. |
+| [MaryPi](https://github.com/rao-studios/MaryPi) | MaryOS as a bootable Ubuntu arm64 image for the Raspberry Pi 5. |
+
+None of it is required to run Thread. It is a standalone binary with HTTP routes
+and no dependency on Sewn, and most of this README treats it that way.
+[Thread in practice — MaryOS](#thread-in-practice--maryos) walks through the
+whole deployment once the mechanics are on the table — it is the worked example
+for everything below.
 
 ## Sewn
 
-[Sewn](https://github.com/rao-studios/Seer) is the mothership server that coordinates a fleet of Thread nodes. It handles authentication (via Supabase), conversation and RAG pipelines, sentiment analysis (Sinatra), royalty tracking (Gita), and personalization (Marielle). When a user issues a search or index request through Sewn, Sewn fans the operation out to all registered Thread nodes in parallel and merges the results.
+[Sewn](https://github.com/rao-studios/Sewn) is the mothership server that coordinates a fleet of Thread nodes. It handles authentication (via Supabase), conversation and RAG pipelines, sentiment analysis (Sinatra), royalty tracking (Gita), and personalization (Marielle). When a user issues a search or index request through Sewn, Sewn fans the operation out to all registered Thread nodes in parallel and merges the results.
 
 Thread owns no user sessions and no authentication — that is Sewn's responsibility. Thread's sole job is fast, reliable vector storage and nearest-neighbor search.
 
@@ -140,54 +221,70 @@ curl http://127.0.0.1:8080/health
 | Flag | Default | Description |
 |---|---|---|
 | `--host` | `127.0.0.1` | HTTP bind address |
-| `--port` | `8080` | HTTP port |
+| `--port` | `8081` | HTTP port |
 | `--grpc-port` | `9090` | gRPC listen port (distributed mode) |
 | `--data-dir` | `~/Documents/thread-db` | Directory for on-disk state (env `THREAD_DATA_DIR`) |
-| `--mothership-host` | _(none)_ | Sewn host — omit for standalone mode |
-| `--mothership-grpc-port` | _(none)_ | Sewn gRPC port |
-| `--use-mlx` | `false` | Use on-device MLX embeddings |
-| `--mlx-model` | `Qwen3-Embedding-0.6B-4bit-DWQ` | Hub model ID for MLX |
-| `--graph-model` | `Qwen3-1.7B-4bit` | Hub model ID for on-device graph extraction |
+| `--node-id` | _(persisted)_ | Fixed node UUID. Overrides the `node-id` on disk — pins `table-<uuid>` across restarts |
+| `--mothership-host` | _(empty)_ | Sewn host — leave unset for standalone mode |
+| `--mothership-grpc-port` | `9091` | Sewn gRPC port |
+| `--fleet-host` | _(empty)_ | Fleet host for dataset import — leave unset to skip |
+| `--fleet-grpc-port` | `9092` | Fleet gRPC port |
+| `--use-mlx` | `false` | Use on-device MLX embeddings (Apple Silicon / CUDA builds only) |
+| `--mlx-model` | `mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ` | Hub model ID for MLX embeddings |
+| `--graph-backend` | `mlx` | Graph extraction backend: `mlx` (on-device), `mistral` (API), or `keyword` |
+| `--graph-model` | `mlx-community/Qwen3-1.7B-4bit` | Hub model ID for on-device graph extraction |
+| `--graph-mistral-model` | `mistral-tiny` | Model used when `--graph-backend mistral` |
 | `--no-graph-extraction` | `false` | Disable LLM extraction (keyword entities only) |
+
+> `--graph-backend mlx` degrades to keyword-only extraction if the build has no
+> Metal kernel library — MLX would otherwise abort the process on first use.
+> Thread logs a warning and carries on; pass `--graph-backend mistral` for API
+> extraction, or rebuild Frigate with its metallib step.
 
 ---
 
 ## Architecture
 
+```mermaid
+flowchart TB
+    subgraph sewn["Sewn — mothership"]
+        SC["ThreadQuery client<br/><i>fan-out: search · index · remove<br/>library · graph</i>"]
+    end
+
+    subgraph thread["Thread — this repo"]
+        subgraph conduit["Conduit layer"]
+            MRC["MothershipRegistrationClient<br/><i>register → session → updateAvailability</i>"]
+            DISP["MothershipRequestDispatcher<br/><i>routes on the payload oneof</i>"]
+            SVC["gRPC services<br/><b>ThreadQuery</b> · <b>ThreadLibrary</b> · <b>ThreadGraph</b>"]
+        end
+
+        subgraph db["Database — actor"]
+            RM["RegistryMutator"] --> REG["ThreadRegistry<br/><i>owners · groups · access</i>"]
+            TM["TableMutator"] --> PT["PartitionTable<br/><i>PartitionIndex × M</i>"]
+            TM --> GS["GraphStore<br/><i>entities + relationships</i>"]
+            PT --> PQ["PartitionQuantizer<br/><i>PQ codebooks · ADC</i>"]
+        end
+
+        HTTP["HTTP routes<br/><i>standalone path</i>"]
+    end
+
+    SC <-->|"one bidirectional<br/>session stream"| MRC
+    MRC --> DISP
+    DISP --> SVC
+    SC -.->|"direct gRPC,<br/>bypassing the stream"| SVC
+    HTTP --> RM
+    SVC --> RM
+    SVC --> TM
+    REG --> SNAP[("plist snapshots<br/>--data-dir")]
+    PT --> SNAP
+    GS --> SNAP
 ```
-┌───────────────────────────────────────────────────────┐
-│  Sewn (Mothership)                                    │
-│  ┌──────────────┐  Fan-out: Search / Index /          │
-│  │ ThreadQuery   │  Remove / Library / Graph ──────────┼──┐
-│  │ Client       │                                     │  │
-│  └──────┬───────┘                                     │  │
-│         │  gRPC bidirectional Session stream          │  │
-└─────────┼─────────────────────────────────────────────┘  │
-          │  (Thread holds the connection)                  │
-          ▼                                                │
-┌───────────────────────────────────────────────────────┐  │
-│  Thread (this repo)                                    │  │
-│  MothershipRegistrationClient                         │  │
-│    1. register()         — sends host/grpc/httpPort   │  │
-│    2. session()          — bidirectional stream       │  │
-│       • pings Sewn every 30 s                         │  │
-│       • receives requests, dispatches via             │  │
-│         MothershipRequestDispatcher                   │  │
-│    3. updateAvailability() — signals storage capacity │  │
-│                                                       │  │
-│  gRPC Services (also reachable directly):             │◀─┘
-│    ThreadQuery   — search / index / remove             │
-│    ThreadLibrary — library (paginated groups)          │
-│    ThreadGraph   — knowledge-graph queries             │
-│                                                       │
-│  Database (actor)                                     │
-│    RegistryMutator  ─▶ ThreadRegistry                  │
-│    TableMutator     ─▶ PartitionTable + GraphStore    │
-│      PartitionIndex × M (per-document PQ)             │
-│        PartitionQuantizer (PQ codebooks, ADC)         │
-│      GraphStore (entities + relationships)            │
-└───────────────────────────────────────────────────────┘
-```
+
+**Thread holds the connection.** Sewn never dials the node — Thread registers
+itself and keeps one stream open, so a node behind NAT needs no inbound port.
+The same three services are reachable directly on `--grpc-port` for any client
+that would rather skip the mothership; [MaryOS](#thread-in-practice--maryos)
+takes that path.
 
 ### Registration & session lifecycle
 
@@ -217,7 +314,9 @@ All services run on `--grpc-port` (default 9090) and are also reachable via the 
 
 | RPC | Request | Response | Description |
 |---|---|---|---|
-| `Library` | `ThreadLibraryRequest` | `ThreadLibraryResponse` | Paginated list of groups for an owner. `after_id` is a cursor; `limit` controls page size. |
+| `Library` | `ThreadLibraryRequest` | `ThreadLibraryResponse` | Paginated list of groups for an owner. `after_id` is a cursor; `limit` controls page size. Passing `document_ids` takes a reverse-map fast path instead of scanning the library — the document-id → group lookup. |
+| `Documents` | `ThreadDocumentsRequest` | `ThreadDocumentsResponse` | Full document content by id, reassembled from the stored partition texts in order. Access mirrors search: caller-owned or publicly available; anything else is silently omitted. |
+| `ExportCorpus` | `ThreadExportCorpusRequest` | `ThreadExportCorpusResponse` | Paged full-document export, filtered by group and by `document_id_prefix`. For training pipelines that must read whole documents rather than reconstruct them from search snippets. |
 
 ### ThreadGraph
 
@@ -353,7 +452,7 @@ Indexes one or more documents. Each document's text is embedded and PQ-compresse
     ["array", "of", "strings"]
   ],
   "sanitize": true,
-  "sewn": {
+  "thread": {
     "owner_id": "alice",
     "group": {
       "id": "my-group",
@@ -373,8 +472,8 @@ Indexes one or more documents. Each document's text is embedded and PQ-compresse
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `inputs` | `[String \| [String]]` | Yes | One entry per document. String or array of strings. |
-| `sewn.owner_id` | String | Yes | Identity of the caller. Lowercased on receipt. |
-| `sewn.group` | Group | No | Assigns all documents in this batch to a named group. |
+| `thread.owner_id` | String | Yes | Identity of the caller. Lowercased on receipt. |
+| `thread.group` | Group | No | Assigns all documents in this batch to a named group. |
 | `sanitize` | Bool | No | When `true`, passes each input through `TextChunker` before embedding. Default: `false`. |
 | `tags` | `[[String]]` | No | Per-document tag hints. Outer index aligns 1:1 with `inputs`. Auto-generated if empty. |
 | `media_type` | String | No | `"text"` (default) or `"image"`. |
@@ -402,7 +501,7 @@ Searches indexed documents for the closest matching partitions to a query string
 ```json
 {
   "query": "how does product quantization work?",
-  "sewn": {
+  "thread": {
     "owner_id": "alice",
     "group": { "id": "my-group", "label": "...", "owner_id": "alice", "documents": [] },
     "scope": "personal",
@@ -414,12 +513,12 @@ Searches indexed documents for the closest matching partitions to a query string
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `query` | String | Yes | Natural language query. Embedded at search time. |
-| `sewn.owner_id` | String | Yes | Scopes the search to this owner's documents by default. |
-| `sewn.scope` | `"personal" \| "global"` | No | `personal` (default): only the owner's documents. `global`: all `.available` documents. |
-| `sewn.aggregate` | Bool | No | When `true`, also searches groups the owner has access to. |
-| `sewn.group` | Group | No | Restricts search to a specific group. |
-| `sewn.groups` | [Group] | No | Restricts search to a list of groups. |
-| `sewn.tags` | [String] | No | Tag filter: only documents whose tag embedding is within threshold are considered. |
+| `thread.owner_id` | String | Yes | Scopes the search to this owner's documents by default. |
+| `thread.scope` | `"personal" \| "global"` | No | `personal` (default): only the owner's documents. `global`: all `.available` documents. |
+| `thread.aggregate` | Bool | No | When `true`, also searches groups the owner has access to. |
+| `thread.group` | Group | No | Restricts search to a specific group. |
+| `thread.groups` | [Group] | No | Restricts search to a list of groups. |
+| `thread.tags` | [String] | No | Tag filter: only documents whose tag embedding is within threshold are considered. |
 
 **Response**
 
@@ -449,7 +548,7 @@ curl -X POST http://127.0.0.1:8080/v1/batch/embeddings \
       "Swift actors serialize concurrent access by routing all calls through a single executor.",
       "Product quantization compresses high-dimensional vectors into compact integer codes."
     ],
-    "sewn": {
+    "thread": {
       "owner_id": "alice",
       "group": {
         "id": "swift-docs",
@@ -468,7 +567,7 @@ curl -X POST http://127.0.0.1:8080/v1/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "how do actors work in Swift?",
-    "sewn": {
+    "thread": {
       "owner_id": "alice",
       "scope": "personal"
     }
@@ -490,6 +589,193 @@ Documents are `.restricted` by default. To make a document globally searchable, 
 ```
 
 Another owner can then find it with `"scope": "global"`.
+
+---
+
+## Thread in practice — MaryOS
+
+MaryOS is the reference consumer, and the one that exercises every part of this
+node. [Mary](https://github.com/rao-studios/Mary) — its macOS assistant — is an
+ambient-intelligence agent: she watches the screen through the accessibility
+tree, carries out declarative Plugins by voice, speaks through Sewn, and
+**remembers through Thread**. Thread is the only durable memory she has; there
+is no second store, no local database, no file of notes on the side.
+
+It is worth reading even if you never touch Mary, because it is a worked answer
+to the questions this README leaves open: how do you address documents when the
+library returns no metadata? What belongs in a group versus a document? When is
+a graph edge worth writing?
+
+### The stack
+
+Mary runs the whole stack locally as supervised child processes, one data
+directory per server, and talks to each over loopback gRPC:
+
+```mermaid
+flowchart LR
+    subgraph app["Mary.app"]
+        RT["MaryRuntime"]
+        TCS["ThreadContextStore<br/><i>actor</i>"]
+        TDC["ThreadDirectClient<br/><i>MaryThread</i>"]
+        RT --> TCS --> TDC
+    end
+
+    SEWN["<b>Sewn</b><br/>HTTP :8080<br/>gRPC :9091"]
+    THREAD["<b>Thread</b><br/>HTTP :8081<br/>gRPC :9090"]
+    FLEET["<b>Fleet</b><br/>HTTP :8083<br/>gRPC :9093"]
+    DB[("~/Documents/maryOS/<br/>thread-db")]
+
+    TDC ==>|"ThreadQuery · ThreadLibrary · ThreadGraph<br/><b>direct, not via the mothership</b>"| THREAD
+    THREAD -.->|"registers + holds<br/>the session stream"| SEWN
+    SEWN -->|"writes memory- and<br/>resonance- groups"| THREAD
+    FLEET -->|"ThreadLibrary.ExportCorpus<br/><i>LoRA training pairs</i>"| THREAD
+    THREAD --> DB
+```
+
+Mary launches the node with an explicit identity and storage root — the node
+UUID pins `table-<uuid>` across restarts, so a relaunch resumes the same
+database rather than minting a fresh one:
+
+```bash
+thread \
+  --host 127.0.0.1 --port 8081 \
+  --grpc-port 9090 \
+  --mothership-host 127.0.0.1 \
+  --mothership-grpc-port 9091 \
+  --data-dir ~/Documents/maryOS/thread-db \
+  --node-id <persisted UUID> \
+  --graph-backend mistral
+```
+
+Two things in that diagram are worth pausing on.
+
+**Mary bypasses the mothership for her own traffic.** Thread still registers
+with Sewn and holds the session stream open, but `ThreadDirectClient` dials
+`127.0.0.1:9090` and speaks to the three services directly — a fresh plaintext
+HTTP/2 connection per call, because the calls are sparse and the user may
+restart the node from the Servers panel mid-session. Sewn remains in the
+picture for authentication (Mary reads `ownerID` from the Sewn session) and for
+its own writes.
+
+**Two writers share one node.** Sewn writes `memory-<owner>` and
+`resonance-<owner>` groups on its own; Mary writes everything prefixed `mary-`.
+Neither may rewrite the other's, so Mary's repair and cleanup passes classify
+every address before touching it.
+
+### Memory topology: two lanes
+
+Mary splits what she knows into two lanes, and the split is enforced by the
+group id alone:
+
+```mermaid
+flowchart TB
+    subgraph ability["Ability lane — transferable craft"]
+        AG["<code>mary-ability-…</code><br/><i>one group per Ability × paradigm</i>"]
+        AD["<code>mary-behavior-…</code><br/>sealed BehavioralEpisode"]
+        ASD["<code>mary-ability-schema-…</code><br/>one learned fact per document"]
+        ASM["<code>mary-ability-schema-manifest-…</code><br/>active-fact catalogue"]
+        AG --- AD & ASD & ASM
+    end
+
+    subgraph personal["Personal lane — this user, this machine"]
+        PG["<code>mary-scope-…</code> · <code>mary-style-…</code><br/><code>mary-routing-…</code> · <code>mary-habit-…</code>"]
+        PD["<code>mary-doc-…</code> state snapshots<br/><code>mary-unit-…</code> project units<br/><code>mary-style-profile-…</code> tenets<br/><code>mary-routing-…</code> settled habits<br/><code>mary-behavior-interaction-…</code> stubs"]
+        PG --- PD
+    end
+
+    subgraph sewnlane["Sewn-owned — Mary never rewrites these"]
+        SG["<code>memory-…</code><br/><code>resonance-…</code>"]
+    end
+
+    ability & personal & sewnlane --> NODE["one Thread node"]
+```
+
+The Ability lane holds what would still be true for a different user: how an
+application behaves, which skill satisfies which intent. The Personal lane holds
+what is true only here — style, routing habits, the shape of an open project. A
+sealed episode goes to Ability; Personal keeps only an interaction stub, joined
+back by turn UUID.
+
+> **Why prefixes carry the meaning.** `ThreadLibrary.Library` returns groups and
+> their document ids — not tags, not metadata. So Mary encodes the family into
+> the id itself and classifies by longest-matching prefix. It is a constraint of
+> this API turned into a design: an id is the one field you can always read
+> back. If you build on Thread, budget for the same thing.
+
+### Writing: a turn becomes a document
+
+When Mary finishes a turn, the assembler seals a `BehavioralEpisode` and deposits
+it. The deposit is one `ThreadQuery.Index` call carrying pre-extracted entities
+and relationships, so Thread does not have to infer them:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as BehavioralAssembler
+    participant S as ThreadContextStore
+    participant C as ThreadDirectClient
+    participant T as Thread · ThreadQuery
+    participant G as GraphStore + PartitionTable
+
+    A->>S: append(sealed episode)
+    S->>S: ownerID from Sewn session
+    Note over S: no owner, or no ability<br/>targets → deposit dropped
+    S->>S: encode via BehavioralCodec
+    S->>S: mint the mary-behavior- id,<br/>address the ability group
+    S->>C: deposit(DepositItem)
+    C->>T: Index(documentID, texts, tags,<br/>name, metadata, entities, relationships)
+    T-->>C: indexedCount
+    Note over T: responds before enrichment —<br/>the caller is not held
+    C-->>S: count
+    S-->>A: deposited
+    T->>G: chunk → embed → PQ compress
+    T->>G: merge entities, weight relationships
+    G->>G: debounced plist snapshot
+```
+
+The `DepositItem` is the full shape Thread accepts on index: a caller-chosen
+`documentID` (so a re-deposit *replaces* rather than accumulates), the partition
+texts, tags, a display name, an opaque metadata blob, and the graph payload.
+Because Mary already knows the entities involved in a turn, she supplies them —
+Thread's on-device LLM extraction is the fallback for callers who don't, not the
+primary path.
+
+### Reading: four shapes of recall
+
+Mary reads from Thread three different ways — and Fleet, training on her
+history, adds a fourth. Which one a caller reaches for says a lot about what
+each is actually for:
+
+```mermaid
+flowchart LR
+    Q1["Did the user do<br/>this before?"] --> S1["<b>ThreadQuery.Search</b><br/>scope personal · topK · groupIds<br/>Thread embeds the query"] --> R1["ranked partitions<br/><i>routing habits, style</i>"]
+    Q2["What is in<br/>this group?"] --> S2["<b>ThreadLibrary.Library</b><br/>cursor paging via after_id"] --> R2["groups + document ids<br/><i>inspection, cleanup</i>"]
+    Q3["What does Mary know<br/>about <i>X</i>?"] --> S3["<b>ThreadGraph.Query</b><br/>seed by name or free text<br/>hops 0-3"] --> R3["entities, edges,<br/>linked documents"]
+    Q4["Train a LoRA<br/>on real turns"] --> S4["<b>ThreadLibrary.ExportCorpus</b><br/>prefix mary-behavior-"] --> R4["whole documents<br/><i>never search snippets</i>"]
+```
+
+Two of those are load-bearing beyond Mary:
+
+- **Search embeds server-side.** Mary sends `query_text`, not a vector. Thread
+  embeds it with whatever backend it was launched with, which means Mary never
+  has to match Thread's embedding model or dimensionality.
+- **Training reads whole documents.** Fleet pulls `ExportCorpus` rather than
+  reusing search results, because a search returns the best-matching *partition*
+  — the fragment that matched, not the record. Reconstructing training pairs
+  from snippets would teach the model from truncated evidence.
+
+### Graph browse: the zero-seed query
+
+One idiom worth stealing: `ThreadGraph.Query` with an empty `entity` **and** an
+empty `query` is browse mode. It returns whole-graph statistics and the top
+entities by mention count, which is how Mary renders "what do you actually know
+about me?" without holding a second index:
+
+```mermaid
+flowchart LR
+    B["entity: ''<br/>query: ''<br/>hops: 0"] --> GQ["ThreadGraph.Query"]
+    GQ --> ST["entityCount<br/>relationshipCount<br/>top entities by mention"]
+```
 
 ---
 

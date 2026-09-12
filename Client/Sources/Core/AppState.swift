@@ -3,14 +3,10 @@ import SwiftUI
 @MainActor
 final class AppState: ObservableObject {
 
-    // MARK: - Library state
-
-    @Published var documents: [DatabaseDocument] = []
-    @Published var uploadingFiles: [UploadingFile] = []
-
     // MARK: - Search state
 
     @Published var searchResults: [SearchResult] = []
+    @Published var searchGraph: SearchGraphContext?
     @Published var isSearching = false
     @Published var searchError: String?
     @Published var lastQuery = ""
@@ -21,13 +17,18 @@ final class AppState: ObservableObject {
 
     // MARK: - Persisted config
 
-    @AppStorage("sewnServerURL")    var serverURL:      String = "http://127.0.0.1:8080"
-    @AppStorage("threadServerURL")   var threadURL:       String = "http://127.0.0.1:8081"
-    @AppStorage("sewnOwnerId")      var ownerId:        String = "database-demo"
-    @AppStorage("sewnGroupId")      var groupId:        String = "demo-group"
-    @AppStorage("sewnBearerToken")  var bearerToken:    String = ""
-    @AppStorage("sewnRefreshToken") var refreshToken:   String = ""
-    @AppStorage("sewnTokenExpiry")  var tokenExpiry:    Double = 0
+    /// The Thread node. This is the server the client actually talks to.
+    @AppStorage("threadServerURL")  var threadURL:     String = "http://127.0.0.1:8081"
+    /// Optional Sewn mothership — only used for account sign-in, never for health.
+    @AppStorage("sewnServerURL")    var serverURL:     String = "http://127.0.0.1:8080"
+    @AppStorage("sewnOwnerId")      var ownerId:       String = "database-demo"
+    @AppStorage("sewnGroupId")      var groupId:       String = "demo-group"
+    @AppStorage("sewnBearerToken")  var bearerToken:   String = ""
+    @AppStorage("sewnRefreshToken") var refreshToken:  String = ""
+    @AppStorage("sewnTokenExpiry")  var tokenExpiry:   Double = 0
+    /// Where the node keeps its on-disk state. Empty means the server's own
+    /// default, `~/Documents/thread-db`. Read-only; the client never writes here.
+    @AppStorage("threadDataDirectory") var dataDirectory: String = ""
 
     var isSignedIn: Bool { !bearerToken.isEmpty }
 
@@ -36,137 +37,29 @@ final class AppState: ObservableObject {
     @Published var isSigningIn = false
     @Published var signInError: String?
 
+    // MARK: - Wire log
+
+    /// Every HTTP call the client makes, newest first.
+    let wireLog = WireLog()
+
     // MARK: - API
 
-    var api: DatabaseAPI {
-        DatabaseAPI(
-            databaseBaseURL: serverURL,
-            threadBaseURL: threadURL,
+    var api: ThreadAPI {
+        ThreadAPI(
+            baseURL: threadURL,
             ownerId: ownerId,
             groupId: groupId,
             groupLabel: "Demo",
-            bearerToken: bearerToken
+            log: wireLog
         )
     }
 
-    // MARK: - Auth
+    // MARK: - Health
 
-    func signIn(email: String, password: String) async {
-        isSigningIn = true
-        signInError = nil
-        do {
-            let result = try await api.signIn(email: email, password: password)
-            ownerId = result.userId
-            bearerToken = result.accessToken
-            refreshToken = result.refreshToken
-            tokenExpiry = Date().timeIntervalSince1970 + result.expiresIn
-        } catch {
-            signInError = error.localizedDescription
-        }
-        isSigningIn = false
-    }
-
-    func signOut() {
-        bearerToken = ""
-        refreshToken = ""
-        tokenExpiry = 0
-        ownerId = "database-demo"
-        signInError = nil
-    }
-
-    // MARK: - Health check
-
+    /// Liveness of the **Thread node**, not the mothership. A standalone node is
+    /// the common case, and gating this on Sewn meant the library never loaded.
     func checkHealth() async {
         serverReachable = await api.isReachable()
-        if serverReachable == true {
-            await loadLibrary()
-        }
-    }
-
-    // MARK: - Library persistence
-
-    func loadLibrary() async {
-        do {
-            let fetched = try await api.fetchLibrary()
-            guard !fetched.isEmpty else { return }
-            // Merge: keep any locally-uploaded docs from this session,
-            // add server docs that aren't already in the list.
-            let existingIds = Set(documents.map { $0.id })
-            let newDocs = fetched.filter { !existingIds.contains($0.id) }
-            if !newDocs.isEmpty {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                    documents.append(contentsOf: newDocs)
-                }
-            }
-        } catch {
-            // Silent fail — library is a convenience; missing it doesn't block usage
-        }
-    }
-
-    // MARK: - Upload
-
-    func uploadFiles(urls: [URL]) {
-        let newFiles = urls.map { UploadingFile(url: $0) }
-        uploadingFiles.append(contentsOf: newFiles)
-        for file in newFiles {
-            let fileId = file.id
-            Task { await self.processFile(id: fileId) }
-        }
-    }
-
-    private func processFile(id: UUID) async {
-        guard let idx = uploadingFiles.firstIndex(where: { $0.id == id }) else { return }
-        let url = uploadingFiles[idx].url
-
-        setStatus(id: id, .reading)
-
-        let text: String
-        do {
-            text = try await Task.detached(priority: .userInitiated) {
-                let raw = try FileReader.extractText(from: url)
-                return TextSanitizer.sanitize(raw)
-            }.value
-        } catch {
-            setStatus(id: id, .error(error.localizedDescription))
-            return
-        }
-
-        guard !text.isEmpty else {
-            setStatus(id: id, .error("Empty file"))
-            return
-        }
-
-        setStatus(id: id, .embedding)
-
-        do {
-            let currentAPI = api
-            let filename = url.lastPathComponent
-            try await currentAPI.embed(text: text, filename: filename)
-
-            let doc = DatabaseDocument(
-                id: UUID().uuidString,
-                name: filename,
-                url: url,
-                uploadedAt: Date()
-            )
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                documents.append(doc)
-            }
-            setStatus(id: id, .done)
-
-            try? await Task.sleep(nanoseconds: 1_800_000_000)
-            withAnimation(.easeOut(duration: 0.3)) {
-                uploadingFiles.removeAll { $0.id == id }
-            }
-        } catch {
-            setStatus(id: id, .error(error.localizedDescription))
-        }
-    }
-
-    private func setStatus(id: UUID, _ status: UploadingFile.UploadStatus) {
-        if let idx = uploadingFiles.firstIndex(where: { $0.id == id }) {
-            uploadingFiles[idx].status = status
-        }
     }
 
     // MARK: - Search
@@ -180,14 +73,31 @@ final class AppState: ObservableObject {
         lastQuery = q
 
         do {
-            let currentAPI = api
-            let results = try await currentAPI.search(query: q)
+            let response = try await api.search(query: q)
+
+            let results = response.texts.enumerated().map { i, text -> SearchResult in
+                let ref = response.references.indices.contains(i) ? response.references[i] : nil
+                return SearchResult(
+                    id: "result-\(i)",
+                    text: text,
+                    documentId: ref?.id ?? "",
+                    partitionId: ref?.partitionId ?? "",
+                    ownerId: ref?.ownerId ?? "",
+                    threadId: ref?.threadId,
+                    shardIndex: ref?.shardIndex
+                )
+            }
+
+            let graph = response.graph.map { SearchGraphContext(from: $0) }
+
             withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                 searchResults = results
+                searchGraph = graph
             }
         } catch {
             searchError = error.localizedDescription
             searchResults = []
+            searchGraph = nil
         }
         isSearching = false
     }
@@ -195,8 +105,70 @@ final class AppState: ObservableObject {
     func clearSearch() {
         withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
             searchResults = []
+            searchGraph = nil
             searchError = nil
             lastQuery = ""
         }
+    }
+
+    // MARK: - Sewn account (optional)
+
+    /// Sign-in is a **mothership** call, not a Thread one. Thread has no
+    /// authentication at all — `owner_id` from the request body is the only
+    /// identity. This exists solely to borrow an account id as the owner.
+    func signIn(email: String, password: String) async {
+        isSigningIn = true
+        signInError = nil
+        defer { isSigningIn = false }
+
+        struct Body: Encodable { let email: String; let password: String }
+        struct Response: Decodable {
+            let userId: String
+            let accessToken: String
+            let refreshToken: String
+            let expiresIn: Double
+            enum CodingKeys: String, CodingKey {
+                case userId = "user_id"
+                case accessToken = "access_token"
+                case refreshToken = "refresh_token"
+                case expiresIn = "expires_in"
+            }
+        }
+
+        let base = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: base + "/v1/auth/sign-in") else {
+            signInError = "Invalid mothership URL."
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+
+        do {
+            request.httpBody = try JSONEncoder().encode(Body(email: email, password: password))
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else {
+                signInError = String(data: data, encoding: .utf8) ?? "Sign-in failed."
+                return
+            }
+            let decoded = try JSONDecoder().decode(Response.self, from: data)
+            ownerId = decoded.userId
+            bearerToken = decoded.accessToken
+            refreshToken = decoded.refreshToken
+            tokenExpiry = Date().timeIntervalSince1970 + decoded.expiresIn
+        } catch {
+            signInError = error.localizedDescription
+        }
+    }
+
+    func signOut() {
+        bearerToken = ""
+        refreshToken = ""
+        tokenExpiry = 0
+        ownerId = "database-demo"
+        signInError = nil
     }
 }

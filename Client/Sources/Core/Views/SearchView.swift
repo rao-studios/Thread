@@ -159,6 +159,13 @@ struct SearchView: View {
                     .padding(.top, 32)
                     .padding(.bottom, 24)
 
+                    // Why these results — matched entities and expansion edges.
+                    if let graph = appState.searchGraph, !graph.isEmpty {
+                        SearchGraphCard(context: graph)
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 16)
+                    }
+
                     // Cards
                     VStack(spacing: 14) {
                         ForEach(Array(appState.searchResults.enumerated()), id: \.element.id) { i, result in

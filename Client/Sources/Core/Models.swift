@@ -1,51 +1,5 @@
 import Foundation
 
-// MARK: - Library
-
-struct DatabaseDocument: Identifiable, Equatable {
-    let id: String
-    let name: String
-    let url: URL?
-    let uploadedAt: Date
-}
-
-struct UploadingFile: Identifiable {
-    let id: UUID
-    let name: String
-    let url: URL
-    var status: UploadStatus
-
-    init(url: URL) {
-        self.id = UUID()
-        self.name = url.lastPathComponent
-        self.url = url
-        self.status = .reading
-    }
-
-    enum UploadStatus: Equatable {
-        case reading
-        case embedding
-        case done
-        case error(String)
-
-        var label: String {
-            switch self {
-            case .reading:        return "Reading…"
-            case .embedding:      return "Embedding…"
-            case .done:           return "Done"
-            case .error(let msg): return msg
-            }
-        }
-
-        var isError: Bool {
-            if case .error = self { return true }
-            return false
-        }
-
-        var isDone: Bool { self == .done }
-    }
-}
-
 // MARK: - Search
 
 struct SearchResult: Identifiable {
@@ -54,7 +8,42 @@ struct SearchResult: Identifiable {
     let documentId: String
     let partitionId: String
     let ownerId: String
-    let distance: Float?
     let threadId: String?
     let shardIndex: Int?
+}
+
+/// The knowledge-graph context behind a search: which entities the query
+/// matched, which edges the one-hop expansion crossed, and how many extra
+/// documents that pulled in. The server has always returned this; the client
+/// used to throw it away.
+struct SearchGraphContext {
+    struct Entity: Identifiable {
+        let id: String
+        let name: String
+        let kind: String
+    }
+
+    struct Relationship: Identifiable {
+        var id: String { "\(subject)|\(predicate)|\(object)" }
+        let subject: String
+        let predicate: String
+        let object: String
+        let weight: Int
+    }
+
+    let entities: [Entity]
+    let relationships: [Relationship]
+    let expandedDocuments: Int
+
+    var isEmpty: Bool {
+        entities.isEmpty && relationships.isEmpty && expandedDocuments == 0
+    }
+
+    init(from dto: SearchGraphDTO) {
+        entities = dto.entities.map { .init(id: $0.id, name: $0.name, kind: $0.kind) }
+        relationships = dto.relationships.map {
+            .init(subject: $0.subject, predicate: $0.predicate, object: $0.object, weight: $0.weight)
+        }
+        expandedDocuments = dto.expandedDocuments
+    }
 }

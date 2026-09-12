@@ -10,14 +10,24 @@ var packageDependencies: [Package.Dependency] = [
     .package(url: "https://github.com/grpc/grpc-swift-nio-transport.git", from: "1.0.0"),
     .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "1.0.0"),
     .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
-    // A SIBLING PATH, NOT THE URL. Frigate carries a path dependency of its own
-    // (../VisionAX, macOS only), and SwiftPM refuses a package required by URL that
-    // depends on a local package. Every other consumer already takes Frigate this way;
-    // on the Linux box, setup-cuda-ubuntu.sh puts the sibling in place.
-    .package(path: "../Frigate"),
-    // .package(url: "https://github.com/rao-studios/Frigate.git", branch: "main"),
-    .package(path: "../Conduit")
-    // .package(url: "https://github.com/rao-studios/Conduit.git", branch: "main")
+    .package(url: "https://github.com/rao-studios/Conduit.git", branch: "main"),
+    // A SIBLING PATH, NOT THE URL — verified, not inherited lore. Switching this to
+    // `.package(url:branch:)` fails resolution outright:
+    //
+    //     error: package 'frigate' is required using a revision-based requirement
+    //            and it depends on local package 'visionax', which is not supported
+    //
+    // Frigate declares `.package(path: "../VisionAX")` inside `#if !os(Linux)`, and
+    // Thread is macOS-only, so that edge is always live here. Neither repo carries
+    // tags, so `branch:` is the only requirement form available — and a revision-based
+    // requirement is precisely what SwiftPM refuses for a package with a local
+    // dependency. Even with a tag it would not work: `../VisionAX` resolved from
+    // inside `.build/checkouts/Frigate` points at a sibling that was never cloned.
+    //
+    // To take Frigate by URL, Frigate must first stop depending on VisionAX by path.
+    // Until then: every other consumer already takes Frigate this way, and on the
+    // Linux box setup-cuda-ubuntu.sh puts the sibling in place.
+    .package(path: "../Frigate")
 ]
 
 var targetDependencies: [Target.Dependency] = [

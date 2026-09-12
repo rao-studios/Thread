@@ -37,13 +37,6 @@ struct SearchResultCard: View {
     @State private var isHovered = false
     @State private var appeared = false
 
-    private var distanceColor: Color {
-        guard let d = result.distance else { return Color.sewnInk.opacity(0.25) }
-        if d < 0.35 { return Color(red: 0.30, green: 0.69, blue: 0.31) }
-        if d < 0.65 { return Color.sewnGold }
-        return Color.sewnInk.opacity(0.35)
-    }
-
     private var shortOwnerId: String {
         let id = result.ownerId
         return id.isEmpty ? "unknown" : String(id.prefix(8))
@@ -68,21 +61,9 @@ struct SearchResultCard: View {
 
                 Spacer()
 
-                // Distance badge — only shown when the server returns a score
-                if let d = result.distance {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(distanceColor)
-                            .frame(width: 6, height: 6)
-                        Text(String(format: "%.4f", d))
-                            .font(.sewnMono(9.5))
-                            .foregroundStyle(Color.sewnInk.opacity(0.40))
-                    }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(Color.sewnFill)
-                    .clipShape(Capsule())
-                }
+                // No distance badge: /v1/search returns ranked results but no
+                // per-result score in `references`, and results arrive in rank
+                // order, so position is the only ranking signal available.
             }
             .padding(.bottom, 14)
 

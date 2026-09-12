@@ -6,6 +6,10 @@ Thread's HTTP layer is the **standalone path**. In distributed mode, all product
 
 ## Routes
 
+> **The request wrapper key is `thread`.** It was `sewn` in earlier revisions,
+> and a stale spelling decodes as `400 Coding key \`thread\` not found.` rather
+> than as a missing field — so a client on the old name fails every scoped call.
+
 ### `POST /health`
 
 Returns `{"status":"ok"}`. No auth required. Used by load balancers and Sewn to verify liveness.
@@ -32,7 +36,7 @@ Indexes one or more documents. Each document's text is embedded and PQ-compresse
 {
   "inputs": ["A string, or...", ["array", "of", "strings"]],
   "sanitize": true,
-  "sewn": {
+  "thread": {
     "owner_id": "alice",
     "group": {
       "id": "my-group",
@@ -49,8 +53,8 @@ Indexes one or more documents. Each document's text is embedded and PQ-compresse
 | Field | Required | Description |
 |---|---|---|
 | `inputs` | Yes | One entry per document. String or array of strings. |
-| `sewn.owner_id` | Yes | Identity of the caller. Lowercased on receipt. |
-| `sewn.group` | No | Assigns all documents in this batch to a named group. |
+| `thread.owner_id` | Yes | Identity of the caller. Lowercased on receipt. |
+| `thread.group` | No | Assigns all documents in this batch to a named group. |
 | `sanitize` | No | When `true`, passes each input through `TextChunker`. Default: `false`. |
 | `tags` | No | Per-document tag hints. Outer index aligns 1:1 with `inputs`. Auto-generated if empty. |
 | `media_type` | No | `"text"` (default) or `"image"`. |
@@ -68,7 +72,7 @@ Searches indexed documents for the closest matching partitions to a query string
 ```json
 {
   "query": "how does product quantization work?",
-  "sewn": {
+  "thread": {
     "owner_id": "alice",
     "scope": "personal",
     "aggregate": false
@@ -79,11 +83,11 @@ Searches indexed documents for the closest matching partitions to a query string
 | Field | Required | Description |
 |---|---|---|
 | `query` | Yes | Natural language query. Embedded at search time. |
-| `sewn.owner_id` | Yes | Scopes the search to this owner's documents. |
-| `sewn.scope` | No | `personal` (default) or `global` (all `.available` documents). |
-| `sewn.aggregate` | No | Also searches groups the owner has access to. |
-| `sewn.group` / `sewn.groups` | No | Restrict search to specific groups. |
-| `sewn.tags` | No | Tag pre-filter — only partitions within tag embedding threshold are considered. |
+| `thread.owner_id` | Yes | Scopes the search to this owner's documents. |
+| `thread.scope` | No | `personal` (default) or `global` (all `.available` documents). |
+| `thread.aggregate` | No | Also searches groups the owner has access to. |
+| `thread.group` / `thread.groups` | No | Restrict search to specific groups. |
+| `thread.tags` | No | Tag pre-filter — only partitions within tag embedding threshold are considered. |
 
 **Response**
 
@@ -114,6 +118,62 @@ File: [Library.swift](../../Sources/API/Routes/Library.swift)
 Knowledge-graph query: resolve entities by name (`entity`) and/or free-text similarity (`query`, embedded server-side), traverse up to `hops` edges (0–3), and return entities, relationships, linked documents, and graph stats. At least one of `entity` / `query` is required.
 
 File: [Graph.swift](../../Sources/API/Routes/Graph.swift)
+
+---
+
+### `POST /v1/library/document`
+
+Groups **containing** a given document — not the document itself. Body: `{"document_id": "..."}`. There is no HTTP route that reads a document's text back; search returns only the partitions that matched.
+
+File: [Library.swift](../../Sources/API/Routes/Library.swift)
+
+---
+
+### `POST /v1/clear` — destructive
+
+Wipes this node's partition table, graph and registry. Requires `{"confirm": true}` or it returns 400. Content files under `documents/` are left alone, because co-located nodes may reference them.
+
+Returns `{"cleared": true, "documents": N, "entities": N}`.
+
+File: [Library.swift](../../Sources/API/Routes/Library.swift)
+
+---
+
+### Graph editing
+
+Granular knowledge-graph mutation. **None of these take an `owner_id` and none are authorized** — any caller can edit any entity in the global graph.
+
+| Route | Body | Notes |
+|---|---|---|
+| `POST /v1/graph/entity/rename` | `{id, name}` | A re-key on `(kind, name)`. If that identity already exists this silently becomes a merge into it. |
+| `POST /v1/graph/entity/merge` | `{from, into}` | `from` stops existing; its documents and edges move. |
+| `POST /v1/graph/entity/set-kind` | `{id, kind}` | Also a re-key. |
+| `POST /v1/graph/entity/delete` | `{id}` | |
+| `POST /v1/graph/relationship/delete` | `{id}` | |
+| `POST /v1/graph/re-extract` | `{document_id, thread:{owner_id}}` | Re-runs extraction under the current policy. **Blocks** until the extractor finishes. |
+
+All return `{"success": bool, "surviving_id"?: string, "entity_count"?: int}`.
+
+Two behaviours callers must handle:
+
+- **Rename, merge and set-kind change the entity id.** `surviving_id` is the id that lives; the one you sent is dead. Adopt it rather than reusing the original.
+- **The two delete routes always return `success: true`**, even for an id that does not exist — they discard the store's return value. A client cannot treat the response as proof of deletion; re-query and reconcile.
+
+Note these bodies have **no `CodingKeys` server-side**, so their keys are literal camelCase (`id`, `name`, `kind`, `from`, `into`) — unlike `owner_id`, `document_id` and friends elsewhere.
+
+File: [GraphAdmin.swift](../../Sources/API/Routes/GraphAdmin.swift)
+
+---
+
+### `GET` / `PUT /v1/graph/policy`
+
+The global extraction policy: ontology (`kinds`), prompt override, predicate aliases, caps, co-mention rule and hub guard. Changes are **prospective** — already-indexed documents keep the graph they were extracted with until they are re-extracted.
+
+`PUT` is decoded with the synthesized initializer, so **Swift property defaults do not apply**: every non-optional key (`kinds`, `predicate_aliases`, `max_entities`, `max_relationships`) must be present or it 400s with ``Coding key `max_entities` not found.`` Send the whole policy back, not a delta.
+
+`co_mention` is the one nested type without `CodingKeys`, so its third field is literally `skipExplicitlyLinked`, not `skip_explicitly_linked`.
+
+File: [GraphAdmin.swift](../../Sources/API/Routes/GraphAdmin.swift)
 
 ---
 
