@@ -11,6 +11,7 @@ actor ThreadGRPCServer {
         database: Database,
         embeddingProvider: any EmbeddingProviding,
         graphExtractor: any GraphExtracting,
+        host: String,
         grpcPort: Int
     ) {
         let query   = ThreadQueryServiceImpl(database: database, embeddingProvider: embeddingProvider,
@@ -19,7 +20,9 @@ actor ThreadGRPCServer {
         let graph   = ThreadGraphServiceImpl(database: database, embeddingProvider: embeddingProvider)
         serverTask = Task {
             let transport = HTTP2ServerTransport.Posix(
-                address: .ipv4(host: "0.0.0.0", port: grpcPort),
+                // Where the HTTP server binds (`--host`): loopback for a Thread an
+                // app launched for itself, 0.0.0.0 only where a deployment asks.
+                address: .ipv4(host: host, port: grpcPort),
                 transportSecurity: .plaintext,
                 config: .defaults {
                     // Direct-connect clients (Bonnie) push deposits and pull
@@ -33,8 +36,17 @@ actor ThreadGRPCServer {
                 }
             )
             let server = GRPCServer(transport: transport, services: [query, library, graph])
-            database.logger.info("ThreadGRPCServer", "gRPC server listening on port \(grpcPort)", service: .startup)
-            try await server.serve()
+            database.logger.info("ThreadGRPCServer", "gRPC server listening on \(host):\(grpcPort)", service: .startup)
+            do {
+                try await server.serve()
+            } catch is CancellationError {
+                // stop() — a shutdown, not a failure.
+            } catch {
+                // Most often the port is taken. Dying loudly lets the launcher
+                // see it, rather than a Thread nobody can query.
+                database.logger.error("ThreadGRPCServer", "gRPC server on \(host):\(grpcPort) failed: \(error)", service: .startup)
+                exit(EXIT_FAILURE)
+            }
         }
     }
 

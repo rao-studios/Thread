@@ -109,11 +109,19 @@ struct ThreadServer: AsyncParsableCommand {
 
         // ── Router + middleware ───────────────────────────────────────────────────
         let router = Router(context: ThreadRequestContext.self)
-        router.middlewares.add(CORSMiddleware(
-            allowOrigin: .all,
-            allowHeaders: [.accept, .authorization, .contentType, .origin],
-            allowMethods: [.get, .post, .options]
-        ))
+        if StackSecret.isLocalMode {
+            // Launched by an app for itself: no browser is a client, so no
+            // CORS — and every request must carry the app's secret. Nothing
+            // else guards these routes (/v1/clear among them). Added before
+            // any route: Hummingbird binds middleware at registration.
+            router.middlewares.add(StackSecretMiddleware<ThreadRequestContext>())
+        } else {
+            router.middlewares.add(CORSMiddleware(
+                allowOrigin: .all,
+                allowHeaders: [.accept, .authorization, .contentType, .origin],
+                allowMethods: [.get, .post, .options]
+            ))
+        }
 
         // ── Register ALL routes before Application.init freezes the responder ────
         configureRoutes(router, database, embeddingModelProvider: embeddingModelProvider,
@@ -122,7 +130,7 @@ struct ThreadServer: AsyncParsableCommand {
         // ── GRPC Server ────────────────────
         let grpcServer = ThreadGRPCServer()
         await grpcServer.start(database: database, embeddingProvider: embeddingModelProvider,
-                               graphExtractor: graphExtractor, grpcPort: grpcPort)
+                               graphExtractor: graphExtractor, host: host, grpcPort: grpcPort)
 
         // A Thread can dial a Sewn mothership and/or a Fleet destination. Both reuse
         // the same destination-agnostic dispatcher (it serves search/library/graph).
