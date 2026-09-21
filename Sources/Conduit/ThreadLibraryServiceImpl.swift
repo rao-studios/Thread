@@ -98,7 +98,8 @@ final class ThreadLibraryServiceImpl: Thread_V1_ThreadLibrary.SimpleServiceProto
         guard let registry = database.registry else { return resp }
         for documentId in request.documentIds {
             if let content = assembleContent(
-                documentId: documentId, ownerID: request.ownerID, registry: registry)
+                documentId: documentId, ownerID: request.ownerID, registry: registry,
+                includeEmbeddings: request.includeEmbeddings)
             {
                 resp.documents.append(content)
             }
@@ -138,7 +139,8 @@ final class ThreadLibraryServiceImpl: Thread_V1_ThreadLibrary.SimpleServiceProto
         let page = Array(sorted.prefix(limit))
         for documentId in page {
             if let content = assembleContent(
-                documentId: documentId, ownerID: request.ownerID, registry: registry)
+                documentId: documentId, ownerID: request.ownerID, registry: registry,
+                includeEmbeddings: request.includeEmbeddings)
             {
                 resp.documents.append(content)
             }
@@ -148,7 +150,7 @@ final class ThreadLibraryServiceImpl: Thread_V1_ThreadLibrary.SimpleServiceProto
     }
 
     private func assembleContent(
-        documentId: String, ownerID: String, registry: ThreadRegistry
+        documentId: String, ownerID: String, registry: ThreadRegistry, includeEmbeddings: Bool = false
     ) -> Thread_V1_ThreadDocumentContent? {
         guard registry.isOwnerLinked(documentId, ownerId: ownerID)
                 || registry.availableDocumentIds.contains(documentId) else {
@@ -162,6 +164,17 @@ final class ThreadLibraryServiceImpl: Thread_V1_ThreadLibrary.SimpleServiceProto
         content.id = documentId
         content.texts = parts.map(\.data)
         content.mediaType = parts.first?.mediaType.rawValue ?? MediaType.text.rawValue
+        if includeEmbeddings {
+            // One entry per partition, in the same order as `texts`. The vector is
+            // present only where the caller supplied it at index time.
+            content.partitions = parts.map { part in
+                var out = Thread_V1_ThreadPartitionOutput()
+                out.id = part.id
+                out.url = part.url.absoluteString
+                if let floats = part.embeddingFloats { out.embedding = floats }
+                return out
+            }
+        }
 
         if let document = database.document(for: documentId) {
             content.name = document.name ?? ""

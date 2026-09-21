@@ -338,6 +338,11 @@ struct PartitionQuantizer: Codable {
     /// `table[i][j]` = distance from the query's i-th subvector to codebook[i]'s j-th centroid.
     /// Call once per query; pass the result to `computeDistance(table:documentCodes:)`.
     /// Cost: O(numSubvectors × codebookSize × subvectorDim) — amortised across all partitions.
+    /// The dimensionality this codebook was trained on (0 before training).
+    var dimension: Int {
+        (codebooks.first?.first?.count ?? 0) * numSubvectors
+    }
+
     func buildDistanceTable(queryVector: [Float]) -> [[Float]] {
         let subvectorDim = queryVector.count / numSubvectors
         var table: [[Float]] = []

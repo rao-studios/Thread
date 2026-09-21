@@ -18,6 +18,7 @@ actor ThreadGRPCServer {
                                             graphExtractor: graphExtractor)
         let library = ThreadLibraryServiceImpl(database: database)
         let graph   = ThreadGraphServiceImpl(database: database, embeddingProvider: embeddingProvider)
+        let update  = ThreadUpdateServiceImpl(database: database)
         serverTask = Task {
             let transport = HTTP2ServerTransport.Posix(
                 // Where the HTTP server binds (`--host`): loopback for a Thread an
@@ -37,7 +38,7 @@ actor ThreadGRPCServer {
             )
             let server = GRPCServer(
                 transport: transport,
-                services: [query, library, graph],
+                services: [query, library, graph, update],
                 // Local mode: the launcher's secret gates every RPC — Remove
                 // and ExportCorpus among them — as StackSecretMiddleware does
                 // for HTTP. Hosted (no env var): nothing is installed.

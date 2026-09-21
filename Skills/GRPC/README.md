@@ -13,7 +13,7 @@ Handles search, indexing, and document removal.
 | RPC | Description |
 |---|---|
 | `Search` | Hybrid KG + PQ search. Accepts `query_text` (Thread embeds) or `query_embedding` (precomputed); optional `entities` for graph matching. Response carries a graph trace. |
-| `Index` | Embed and index a batch of documents. Returns immediately; background write queue drains async. |
+| `Index` | Embed and index a batch of documents. Returns immediately; background write queue drains async. An item may describe its partitions itself (`partitions`, parallel to `texts`): a supplied `embedding` is used as-is — Thread does not embed that text — and is kept in `-parts`; a supplied `url` becomes that partition's address instead of the document's. Every partition of a document must share one dimensionality, a multiple of 16 (one PQ codebook slices them all); a text search skips any document stored at another width. |
 | `Remove` | Remove specific document IDs, or all documents for an owner when `document_ids` is empty. |
 
 Implementation: [ThreadQueryServiceImpl.swift](../../Sources/GRPC/ThreadQueryServiceImpl.swift)
@@ -25,6 +25,7 @@ Paginated document library.
 | RPC | Description |
 |---|---|
 | `Library` | Paginated list of groups for an owner. `after_id` is a cursor; `limit` controls page size. |
+| `Documents` / `ExportCorpus` | Full document content — partition texts in stored order. With `include_embeddings`, `partitions` also carries each partition's id, url and kept vector (present only where the caller supplied it at index time). |
 
 Implementation: [ThreadLibraryServiceImpl.swift](../../Sources/GRPC/ThreadLibraryServiceImpl.swift)
 

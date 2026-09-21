@@ -14,6 +14,22 @@ extension Database {
         let update: DatabaseUpdate?
         let name: String?
         let metadata: Data?
+        /// Per-partition overrides, parallel to `data`/`texts`. Nil keeps every
+        /// partition exactly as before: the document's url, no kept embedding.
+        let partitions: [PartitionOverride]?
+
+        /// What a caller may say about one partition it describes itself.
+        struct PartitionOverride: Sendable {
+            /// The partition's own address instead of the document's.
+            var url: URL?
+            /// Keep the full embedding in `-parts` — set when the caller supplied it.
+            var keepEmbedding: Bool
+
+            init(url: URL? = nil, keepEmbedding: Bool = false) {
+                self.url = url
+                self.keepEmbedding = keepEmbedding
+            }
+        }
 
         init(id: String,
              data: [EmbeddingData],
@@ -23,7 +39,8 @@ extension Database {
              mediaType: MediaType = .text,
              update: DatabaseUpdate? = nil,
              name: String? = nil,
-             metadata: Data? = nil) {
+             metadata: Data? = nil,
+             partitions: [PartitionOverride]? = nil) {
             self.id = id
             self.data = data
             self.texts = texts
@@ -33,6 +50,7 @@ extension Database {
             self.update = update
             self.name = name
             self.metadata = metadata
+            self.partitions = partitions
         }
     }
 }
@@ -103,6 +121,8 @@ extension Database {
         struct Prepared {
             let document: Database.Document
             let partitions: [Database.Partition]
+            /// Parallel to `partitions`: keep that partition's embedding in `-parts`.
+            let keepEmbeddings: [Bool]
             let update: DatabaseUpdate?
         }
 
@@ -111,20 +131,22 @@ extension Database {
 
         for item in items {
             let storage = documentStore(for: item.id)
-            let partitions: [Database.Partition] = item.data.enumerated().compactMap { i, d in
+            let built: [(Database.Partition, Bool)] = item.data.enumerated().compactMap { i, d in
                 guard case let .floats(array) = d.embedding, !array.isEmpty else { return nil }
-                return Database.Partition(
+                let override = item.partitions.flatMap { i < $0.count ? $0[i] : nil }
+                return (Database.Partition(
                     id: computeNumericHash(from: array, documentId: item.id),
                     documentId: item.id,
-                    url: storage.url,
+                    url: override?.url ?? storage.url,
                     embedding: array,
                     mediaType: item.mediaType,
                     text: item.texts[i],
                     ownerId: request.ownerId
-                )
+                ), override?.keepEmbedding ?? false)
             }
             let document = Database.Document(id: item.id, url: storage.url, ownerId: request.ownerId, name: item.name)
-            prepared.append(Prepared(document: document, partitions: partitions, update: item.update))
+            prepared.append(Prepared(document: document, partitions: built.map(\.0),
+                                     keepEmbeddings: built.map(\.1), update: item.update))
         }
 
         // Persist document + partition-content files in a bounded parallel task
@@ -142,7 +164,9 @@ extension Database {
                     inFlight -= 1
                 }
                 let document = item.document
-                let partitionData = item.partitions.map { PartitionData(from: $0) }
+                let partitionData = zip(item.partitions, item.keepEmbeddings).map {
+                    PartitionData(from: $0, keepEmbedding: $1)
+                }
                 group.addTask {
                     FilePersistence(key: "documents/\(document.id)", kind: .basic, logger: loggerBase)
                         .save(state: document)

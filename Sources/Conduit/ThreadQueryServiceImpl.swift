@@ -194,14 +194,46 @@ final class ThreadQueryServiceImpl: Thread_V1_ThreadQuery.SimpleServiceProtocol,
             }
             let graph = Database.GraphPayload(entities: resolvedEntities, relationships: relations)
 
-            let (embeddings, _) = try await embeddingProvider.run(
-                texts,
-                logger: database.baseLogger,
-                priority: false
-            )
-            let sorted = embeddings.sorted { $0.index < $1.index }
-            let partitionEmbeddings = Array(sorted).enumerated()
-                .map { EmbeddingData(embedding: $0.element.embedding, index: $0.offset) }
+            // A caller may describe partitions itself (`partitions`, parallel to
+            // `texts`): a supplied embedding is used as-is and kept, a supplied url
+            // replaces the document's. Only texts without an embedding are sent to
+            // this node's embedder.
+            let described = Array(item.partitions)
+            guard described.isEmpty || described.count == texts.count else {
+                throw RPCError(code: .invalidArgument,
+                               message: "document \(item.documentID): \(described.count) partitions for \(texts.count) texts")
+            }
+            var vectors = [[Float]?](repeating: nil, count: texts.count)
+            for (i, partition) in described.enumerated() where !partition.embedding.isEmpty {
+                vectors[i] = Array(partition.embedding)
+            }
+            let missing = vectors.indices.filter { vectors[$0] == nil }
+            if !missing.isEmpty {
+                let (embeddings, _) = try await embeddingProvider.run(
+                    missing.map { texts[$0] },
+                    logger: database.baseLogger,
+                    priority: false
+                )
+                for entry in embeddings where entry.index < missing.count {
+                    if case let .floats(v) = entry.embedding { vectors[missing[entry.index]] = v }
+                }
+            }
+            // One PQ codebook covers every partition of a document and slices each
+            // vector the same way, so they must agree on a dimensionality it divides.
+            let dimensions = Set(vectors.compactMap { $0?.count }.filter { $0 > 0 })
+            guard dimensions.count <= 1 else {
+                throw RPCError(code: .invalidArgument,
+                               message: "document \(item.documentID): partitions disagree on dimensionality \(dimensions.sorted())")
+            }
+            if let dim = dimensions.first, dim % PartitionQuantizer.defaultNumSubvectors != 0 {
+                throw RPCError(code: .invalidArgument,
+                               message: "document \(item.documentID): dimensionality \(dim) is not a multiple of \(PartitionQuantizer.defaultNumSubvectors)")
+            }
+            let partitionEmbeddings = vectors.enumerated()
+                .map { EmbeddingData(embedding: .floats($0.element ?? []), index: $0.offset) }
+            let overrides: [Database.BatchPutItem.PartitionOverride]? = described.isEmpty ? nil :
+                described.map { .init(url: $0.url.isEmpty ? nil : URL(string: $0.url),
+                                      keepEmbedding: !$0.embedding.isEmpty) }
 
             let fullCID = item.documentID
             fullCIDs.append(fullCID)
@@ -215,7 +247,8 @@ final class ThreadQueryServiceImpl: Thread_V1_ThreadQuery.SimpleServiceProtocol,
                 mediaType: item.mediaType == "image" ? .image : .text,
                 update: nil,
                 name: item.name.isEmpty ? nil : item.name,
-                metadata: item.metadata.isEmpty ? nil : item.metadata
+                metadata: item.metadata.isEmpty ? nil : item.metadata,
+                partitions: overrides
             ))
         }
 
