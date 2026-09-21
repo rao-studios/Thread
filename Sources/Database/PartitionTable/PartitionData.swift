@@ -21,9 +21,15 @@ struct PartitionData: Codable {
     var mediaType: MediaType
     var data: String
     var ownerId: String
+    /// The partition's full-precision embedding (little-endian fp32), kept only
+    /// when the caller supplied it at index time. The table holds PQ codes, which
+    /// are enough to rank but not to reproduce the vector; a caller that brought
+    /// its own vector can read it back exactly from here. Absent for partitions
+    /// Thread embedded itself, so their files are unchanged.
+    var embedding: Data?
 
     enum CodingKeys: String, CodingKey {
-        case id, url, ownerId, data
+        case id, url, ownerId, data, embedding
         case mediaType = "media_type"
     }
 
@@ -41,12 +47,21 @@ struct PartitionData: Codable {
         self.ownerId   = ownerId
     }
 
-    init(from partition: Database.Partition) {
+    init(from partition: Database.Partition, keepEmbedding: Bool = false) {
         id        = partition.id
         url       = partition.url
         mediaType = partition.mediaType
         data      = partition.text
         ownerId   = partition.ownerId
+        embedding = keepEmbedding && !partition.embedding.isEmpty
+            ? partition.embedding.withUnsafeBufferPointer { Data(buffer: $0) }
+            : nil
+    }
+
+    /// The kept embedding as floats, or nil when none was kept.
+    var embeddingFloats: [Float]? {
+        guard let embedding, embedding.count % MemoryLayout<Float>.size == 0 else { return nil }
+        return embedding.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
     }
 }
 

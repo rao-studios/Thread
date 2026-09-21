@@ -89,6 +89,12 @@ struct PartitionIndex: Codable {
                 adjustWithSinatra: Bool = true,
                 logger: ThreadLogger) -> (result: PartitionSearchResult, adjustment: SinatraAdjustment?) {
 
+        // A document whose partitions were supplied by the caller may have been
+        // embedded at another dimensionality. Its codebook is sliced by its own
+        // subvector width, so a mismatched query would read past it — it simply
+        // is not comparable, and scores nothing.
+        guard pq.dimension == queryEmbedding.count else { return (result: ([], []), adjustment: nil) }
+
         let distanceTable = pq.buildDistanceTable(queryVector: queryEmbedding)
         let topK = topKSlotsByDistance(table: distanceTable, k: k)
 
@@ -151,6 +157,7 @@ struct PartitionIndex: Codable {
     func searchWithScores(queryEmbedding: [Float],
                           k: Int,
                           metadataLoader: PartitionDataLoader? = nil) -> [(Database.Partition, Float)] {
+        guard pq.dimension == queryEmbedding.count else { return [] }
         let distanceTable = pq.buildDistanceTable(queryVector: queryEmbedding)
         return topKSlotsByDistance(table: distanceTable, k: k).map { r in
             (r.slot.toPartition(metadata: metadataLoader?(r.slot.documentId, r.slot.id)), r.distance)

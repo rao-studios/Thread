@@ -18,6 +18,7 @@ actor ThreadGRPCServer {
                                             graphExtractor: graphExtractor)
         let library = ThreadLibraryServiceImpl(database: database)
         let graph   = ThreadGraphServiceImpl(database: database, embeddingProvider: embeddingProvider)
+        let update  = ThreadUpdateServiceImpl(database: database)
         serverTask = Task {
             let transport = HTTP2ServerTransport.Posix(
                 // Where the HTTP server binds (`--host`): loopback for a Thread an
@@ -35,7 +36,7 @@ actor ThreadGRPCServer {
                     $0.compression.enabledAlgorithms = [.gzip, .none]
                 }
             )
-            let server = GRPCServer(transport: transport, services: [query, library, graph])
+            let server = GRPCServer(transport: transport, services: [query, library, graph, update])
             database.logger.info("ThreadGRPCServer", "gRPC server listening on \(host):\(grpcPort)", service: .startup)
             do {
                 try await server.serve()

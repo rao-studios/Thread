@@ -1,8 +1,12 @@
 import Conduit
 import Foundation
 import GRPCCore
+import GRPCProtobuf
 
-final class ThreadUpdateServiceImpl: Sendable {
+/// Served through the mothership session dispatcher and, directly, on the
+/// node's gRPC port — a direct client can rename a group, change access or read
+/// stats without a Sewn hop.
+final class ThreadUpdateServiceImpl: Thread_V1_ThreadUpdate.SimpleServiceProtocol, Sendable {
     let database: Database
 
     init(database: Database) {

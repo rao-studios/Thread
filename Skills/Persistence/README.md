@@ -12,7 +12,7 @@ Thread persists all state as binary property-list snapshots under its data direc
 | `graph-<nodeId>` | `GraphStore` — entities + relationships (adjacency rebuilt on decode) |
 | `registry` | `ThreadRegistry` — ownership, groups, access, stats |
 | `documents/{id}` | `Database.Document` |
-| `documents/{id}-parts` | `[PartitionData]` — partition text/url/owner, loaded on demand |
+| `documents/{id}-parts` | `[PartitionData]` — partition text/url/owner, loaded on demand; plus the caller-supplied embedding (fp32, little-endian) for partitions indexed with one, which the PQ table cannot reproduce |
 | `node-id` | Persisted node UUID |
 
 ---
