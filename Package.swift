@@ -10,8 +10,7 @@ var packageDependencies: [Package.Dependency] = [
     .package(url: "https://github.com/grpc/grpc-swift-nio-transport.git", from: "1.0.0"),
     .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "1.0.0"),
     .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
-    // LOCAL WORK: Conduit by path while the partition fields land; restore the URL form before committing.
-    .package(path: "../Conduit"),
+    .package(url: "https://github.com/rao-studios/Conduit.git", branch: "main"),
     // A SIBLING PATH, NOT THE URL — verified, not inherited lore. Switching this to
     // `.package(url:branch:)` fails resolution outright:
     //
