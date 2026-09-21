@@ -70,6 +70,9 @@ final class FilePersistence : AnyPersistence, @unchecked Sendable {
         return value.appendingPathComponent("thread-db")
     }
     
+    /// PIN: file-system calls take `url.path(percentEncoded: false)`. Plain `path()`
+    /// percent-encodes, so under a root like `~/Library/Application Support/…` every
+    /// existence check misses and every create fails silently — nothing persists.
     func save<State>(state: State,
                      logger: Logger? = nil) where State : Codable {
         
@@ -78,7 +81,7 @@ final class FilePersistence : AnyPersistence, @unchecked Sendable {
         do {
             let data = try encoder.encode(state)
             
-            if !FileManager.default.fileExists(atPath: self.url.path()) {
+            if !FileManager.default.fileExists(atPath: self.url.path(percentEncoded: false)) {
                 let directory = self.url.deletingLastPathComponent()
                 try FileManager
                     .default
@@ -91,7 +94,7 @@ final class FilePersistence : AnyPersistence, @unchecked Sendable {
                 _ = FileManager
                     .default
                     .createFile(
-                        atPath: self.url.path(),
+                        atPath: self.url.path(percentEncoded: false),
                         contents: data
                     )
             } else {
@@ -112,7 +115,7 @@ final class FilePersistence : AnyPersistence, @unchecked Sendable {
     func restore<State>() -> State? where State : Codable {
         let decoder = PropertyListDecoder()
 
-        guard FileManager.default.fileExists(atPath: url.path()) else {
+        guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else {
             return nil
         }
 

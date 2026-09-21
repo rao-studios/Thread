@@ -167,7 +167,7 @@ extension Database {
     /// families, and the registry WAL.
     private func purgeLegacyShardFiles() {
         let dir = FilePersistence.getDefaultURL()
-        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: dir.path()) else { return }
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: dir.path(percentEncoded: false)) else { return }
         let legacy = contents.filter { $0.hasPrefix("shard-\(nodeId)") || $0 == "registry-wal" }
         guard !legacy.isEmpty else { return }
         for name in legacy {

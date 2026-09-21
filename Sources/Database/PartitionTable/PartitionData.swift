@@ -10,6 +10,15 @@ import Foundation
 enum MediaType: String, Codable {
     case text
     case image
+    /// Source code stored as structured cards (Craft). Embedded and searched like
+    /// text; the type tells a reader the partition is code, not prose.
+    case code
+
+    /// The wire spelling a client sends in `ThreadIndexItem.media_type`. Anything
+    /// unrecognized (including MIME-style `text/x-swift`) is text.
+    init(wire: String) {
+        self = MediaType(rawValue: wire) ?? .text
+    }
 }
 
 /// Full content and metadata for one partition, stored per-document in

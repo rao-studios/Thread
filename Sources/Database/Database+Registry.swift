@@ -44,7 +44,7 @@ extension Database {
 
         for documentId in allDocumentIds {
             let store = documentStore(for: documentId)
-            guard FileManager.default.fileExists(atPath: store.url.path()) else {
+            guard FileManager.default.fileExists(atPath: store.url.path(percentEncoded: false)) else {
                 orphanedIds.append(documentId)
                 continue
             }

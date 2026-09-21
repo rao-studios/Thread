@@ -40,6 +40,29 @@ final class DataDirectoryTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: store.url.path))
     }
 
+    /// A root with a space, like Craft's `~/Library/Application Support/Craft/thread-db`:
+    /// save must create the file, restore must read it back, and a nested key
+    /// (a document's `-parts`) must land too.
+    func testARootWithASpacePersistsAndRestores() {
+        let spaced = tempRoot.appendingPathComponent("Application Support/thread-db")
+        FilePersistence.configure(dataDirectory: spaced.path)
+        let logger = Logger(label: "test")
+
+        let table = FilePersistence(key: "table-probe", kind: .basic, logger: logger)
+        table.save(state: ["hello": 1])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: table.url.path(percentEncoded: false)), "created under the real path")
+        let restored: [String: Int]? = FilePersistence(key: "table-probe", kind: .basic, logger: logger).restore()
+        XCTAssertEqual(restored, ["hello": 1])
+
+        let parts = FilePersistence(key: "documents/craft-abc/Sources/A+B.swift@v1-parts", kind: .basic, logger: logger)
+        parts.save(state: ["x"])
+        table.save(state: ["hello": 2])   // the overwrite path
+        let again: [String: Int]? = FilePersistence(key: "table-probe", kind: .basic, logger: logger).restore()
+        XCTAssertEqual(again, ["hello": 2])
+        let nested: [String]? = FilePersistence(key: "documents/craft-abc/Sources/A+B.swift@v1-parts", kind: .basic, logger: logger).restore()
+        XCTAssertEqual(nested, ["x"])
+    }
+
     func testTildeIsExpanded() {
         let root = FilePersistence.configure(dataDirectory: "~/thread-data-dir-tilde-probe")
         XCTAssertFalse(root.path.contains("~"))
