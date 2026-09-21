@@ -224,7 +224,7 @@ curl http://127.0.0.1:8080/health
 | `--port` | `8081` | HTTP port |
 | `--grpc-port` | `9090` | gRPC listen port (distributed mode) |
 | `--data-dir` | `~/Documents/thread-db` | Directory for on-disk state (env `THREAD_DATA_DIR`) |
-| `--node-id` | _(persisted)_ | Fixed node UUID. Overrides the `node-id` on disk — pins `table-<uuid>` across restarts |
+| `--node-id` | _(persisted)_ | Fixed node UUID. Overrides the `node-id` on disk — pins `table-<uuid>` across restarts. `THREAD_NODE_ID` in the environment is the fallback (how Ambient hands it over: argv is visible in `ps`) |
 | `--mothership-host` | _(empty)_ | Sewn host — leave unset for standalone mode |
 | `--mothership-grpc-port` | `9091` | Sewn gRPC port |
 | `--fleet-host` | _(empty)_ | Fleet host for dataset import — leave unset to skip |

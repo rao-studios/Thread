@@ -35,7 +35,15 @@ actor ThreadGRPCServer {
                     $0.compression.enabledAlgorithms = [.gzip, .none]
                 }
             )
-            let server = GRPCServer(transport: transport, services: [query, library, graph])
+            let server = GRPCServer(
+                transport: transport,
+                services: [query, library, graph],
+                // Local mode: the launcher's secret gates every RPC — Remove
+                // and ExportCorpus among them — as StackSecretMiddleware does
+                // for HTTP. Hosted (no env var): nothing is installed.
+                interceptors: StackSecretServerInterceptor.forLocalMode(
+                    secret: StackSecret.value,
+                    logger: SwiftLogConduitLogger(database.logger.base)))
             database.logger.info("ThreadGRPCServer", "gRPC server listening on \(host):\(grpcPort)", service: .startup)
             do {
                 try await server.serve()
