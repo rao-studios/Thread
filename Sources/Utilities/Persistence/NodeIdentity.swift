@@ -24,6 +24,25 @@ import Logging
 struct NodeIdentity {
     let nodeId: UUID
 
+    /// The variable a launcher hands the node id in. Ambient sets it: the id
+    /// is the handle on the mothership session, and argv is visible to every
+    /// local user in `ps`. `--node-id` still wins for a hand launch.
+    static let environmentKey = "THREAD_NODE_ID"
+
+    /// The fixed id, if any: argv first, the environment as fallback. A value
+    /// that is not a UUID is returned in `rejected` so the caller can say so,
+    /// and the persisted (or fresh) id is used instead.
+    static func override(argument: String?, environment: [String: String]) -> (uuid: UUID?, rejected: String?) {
+        for candidate in [argument, environment[environmentKey]] {
+            guard let candidate else { continue }
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if let uuid = UUID(uuidString: trimmed) { return (uuid, nil) }
+            return (nil, trimmed)
+        }
+        return (nil, nil)
+    }
+
     /// Load (or create) the node identity from `<data-dir>/node-id`.
     /// Synchronous — safe to call from a non-async context at server startup,
     /// before the cooperative thread pool is active.

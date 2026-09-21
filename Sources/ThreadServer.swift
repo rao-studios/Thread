@@ -1,6 +1,7 @@
 import ArgumentParser
 import Conduit
 import Foundation
+import GRPCCore
 import Logging
 import Hummingbird
 #if canImport(Glibc)
@@ -8,6 +9,15 @@ import Glibc
 #elseif canImport(Darwin)
 import Darwin
 #endif
+
+extension ThreadServer {
+    /// The launcher's secret rides only to the loopback mothership the
+    /// launcher started — never to a remote one, and never to Fleet.
+    static func mothershipInterceptors(secret: String?, mothershipHost: String) -> [any ClientInterceptor] {
+        guard let secret, !secret.isEmpty, StackSecret.isLoopback(authority: mothershipHost) else { return [] }
+        return [StackSecretClientInterceptor(secret: secret)]
+    }
+}
 
 func configureRoutes(
     _ router: Router<ThreadRequestContext>,
@@ -68,7 +78,7 @@ struct ThreadServer: AsyncParsableCommand {
     @ArgumentParser.Option(name: .long, help: "Fleet destination gRPC port.")
     var fleetGrpcPort: Int = 9092
 
-    @ArgumentParser.Option(name: .long, help: "Fixed node UUID. Overrides any persisted node-id on disk.")
+    @ArgumentParser.Option(name: .long, help: "Fixed node UUID (env THREAD_NODE_ID). Overrides any persisted node-id on disk.")
     var nodeId: String?
 
     @ArgumentParser.Option(name: .long, help: "Directory for on-disk state (default ~/Documents/thread-db; env THREAD_DATA_DIR).")
@@ -102,7 +112,11 @@ struct ThreadServer: AsyncParsableCommand {
         logger.info("Storage root: \(dataRoot.path)")
 
         // ── Core services ─────────────────────────────────────────────────────────
-        let fixedNodeId = nodeId.flatMap { UUID(uuidString: $0) }
+        let (fixedNodeId, rejectedNodeId) = NodeIdentity.override(
+            argument: nodeId, environment: ProcessInfo.processInfo.environment)
+        if let rejectedNodeId {
+            logger.warning("NodeIdentity: ignoring a node id that is not a UUID (\(rejectedNodeId.prefix(16))…); using the persisted one")
+        }
         let database = Database(nodeId: fixedNodeId)
         let embeddingModelProvider: any EmbeddingProviding = makeEmbeddingProvider()
         let graphExtractor: any GraphExtracting = makeGraphExtractor()
@@ -160,7 +174,9 @@ struct ThreadServer: AsyncParsableCommand {
                     threadGRPCPort: grpcPort,
                     threadHTTPPort: port,
                     requestDispatcher: dispatcher,
-                    logger: SwiftLogConduitLogger(logger)
+                    logger: SwiftLogConduitLogger(logger),
+                    interceptors: Self.mothershipInterceptors(
+                        secret: StackSecret.value, mothershipHost: mothershipHost)
                 )
                 await client.startHeartbeatLoop()
                 registerAvailabilityRoute(router, registrationClient: client)
