@@ -1,12 +1,15 @@
 import Foundation
+import RaoStack
 
 extension NetworkService {
     enum BaseEndpoint: String, Codable {
         case global = "api.mistral.ai"
 
         var apiKey: String {
-            // Read MISTRAL_API_KEY from environment; fall back to empty string.
-            ProcessInfo.processInfo.environment["MISTRAL_API_KEY"] ?? ""
+            // Read on every call: RAO_HOME/keys/providers.json when the
+            // launcher set RAO_HOME (a key saved in any Rao app lands here
+            // with no restart), else MISTRAL_API_KEY from the environment.
+            ProviderKeyStore.process.value(for: ProviderKeyStore.mistralAPIKey) ?? ""
         }
     }
 

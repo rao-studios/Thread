@@ -48,6 +48,8 @@ var targetDependencies: [Target.Dependency] = [
     // carries Frigate's concrete HubDownloader / HubTokenizerLoader.
     .product(name: "FrigateBridge", package: "Frigate"),
     .product(name: "Conduit", package: "Conduit"),
+    // The shared ~/.rao contract: stack secret, /health proof, provider keys.
+    .product(name: "RaoStack", package: "Conduit"),
 ]
 
 let supportedPlatforms: [SupportedPlatform] = [.macOS(.v15)]
@@ -67,6 +69,7 @@ let package = Package(
       dependencies: [
         "thread",
         .product(name: "Conduit", package: "Conduit"),
+        .product(name: "RaoStack", package: "Conduit"),
         .product(name: "HummingbirdTesting", package: "hummingbird"),
       ],
       path: "Tests/thread-tests"

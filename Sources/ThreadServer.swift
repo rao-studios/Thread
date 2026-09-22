@@ -4,6 +4,7 @@ import Foundation
 import GRPCCore
 import Logging
 import Hummingbird
+import RaoStack
 #if canImport(Glibc)
 import Glibc
 #elseif canImport(Darwin)
@@ -12,10 +13,25 @@ import Darwin
 
 extension ThreadServer {
     /// The launcher's secret rides only to the loopback mothership the
-    /// launcher started — never to a remote one, and never to Fleet.
+    /// launcher started — never to a remote one, and never to Fleet. On a
+    /// shared ~/.rao stack it is this app's own secret, which the shared
+    /// Sewn knows along with every other app's.
     static func mothershipInterceptors(secret: String?, mothershipHost: String) -> [any ClientInterceptor] {
         guard let secret, !secret.isEmpty, StackSecret.isLoopback(authority: mothershipHost) else { return [] }
         return [StackSecretClientInterceptor(secret: secret)]
+    }
+
+    /// Where this Thread keeps its state: `--data-dir`, then THREAD_DATA_DIR,
+    /// then — on a shared stack — RAO_HOME/apps/<RAO_APP>/thread-db; nil
+    /// leaves FilePersistence's own default.
+    static func resolveDataDirectory(argument: String?, environment: [String: String]) -> String? {
+        if let argument, !argument.isEmpty { return argument }
+        if let fromEnvironment = environment["THREAD_DATA_DIR"], !fromEnvironment.isEmpty { return fromEnvironment }
+        if let home = try? RaoHome.fromEnvironment(environment),
+           let app = RaoApp(header: environment[StackSecret.appEnvironmentKey]) {
+            return PrivateFile.path(home.threadDataDirectory(for: app))
+        }
+        return nil
     }
 }
 
@@ -23,9 +39,10 @@ func configureRoutes(
     _ router: Router<ThreadRequestContext>,
     _ database: Database,
     embeddingModelProvider: any EmbeddingProviding,
-    graphExtractor: any GraphExtracting
+    graphExtractor: any GraphExtracting,
+    stack: StackMode
 ) {
-    registerHealthRoute(router)
+    registerHealthRoute(router, stack: stack)
     registerSearchRoute(router, database, embeddingModelProvider: embeddingModelProvider)
     registerBatchEmbeddingsRoute(router, database, embeddingModelProvider: embeddingModelProvider,
                                  graphExtractor: graphExtractor)
@@ -97,9 +114,21 @@ struct ThreadServer: AsyncParsableCommand {
         // ── Load .env before anything reads ProcessInfo.environment ──────────────
         loadDotEnv()
 
-        // ── Storage root: --data-dir beats THREAD_DATA_DIR beats ~/Documents/thread-db
+        // ── Stack secret: decided once, before anything answers. A Thread told
+        // to use RAO_HOME never comes up open — without its app's secret it
+        // refuses to start.
+        let stack: StackMode
+        do {
+            stack = try StackMode.thread(environment: ProcessInfo.processInfo.environment)
+        } catch {
+            FileHandle.standardError.write(Data("thread: can't start the local stack: \(error)\n".utf8))
+            Foundation.exit(EXIT_FAILURE)
+        }
+
+        // ── Storage root: --data-dir, THREAD_DATA_DIR, RAO_HOME/apps/<app>/thread-db,
+        // then ~/Documents/thread-db
         let dataRoot = FilePersistence.configure(
-            dataDirectory: dataDir ?? ProcessInfo.processInfo.environment["THREAD_DATA_DIR"])
+            dataDirectory: Self.resolveDataDirectory(argument: dataDir, environment: ProcessInfo.processInfo.environment))
 
         // ── Logging ──────────────────────────────────────────────────────────────
         LoggingSystem.bootstrap { label in
@@ -110,6 +139,7 @@ struct ThreadServer: AsyncParsableCommand {
         var logger = Logger(label: "thread")
         logger.logLevel = .debug
         logger.info("Storage root: \(dataRoot.path)")
+        logger.info("Stack: \(stack.summary)")
 
         // ── Core services ─────────────────────────────────────────────────────────
         let (fixedNodeId, rejectedNodeId) = NodeIdentity.override(
@@ -123,12 +153,12 @@ struct ThreadServer: AsyncParsableCommand {
 
         // ── Router + middleware ───────────────────────────────────────────────────
         let router = Router(context: ThreadRequestContext.self)
-        if StackSecret.isLocalMode {
+        if stack.isLocal {
             // Launched by an app for itself: no browser is a client, so no
             // CORS — and every request must carry the app's secret. Nothing
             // else guards these routes (/v1/clear among them). Added before
             // any route: Hummingbird binds middleware at registration.
-            router.middlewares.add(StackSecretMiddleware<ThreadRequestContext>())
+            router.middlewares.add(StackSecretMiddleware<ThreadRequestContext>(mode: stack))
         } else {
             router.middlewares.add(CORSMiddleware(
                 allowOrigin: .all,
@@ -139,12 +169,13 @@ struct ThreadServer: AsyncParsableCommand {
 
         // ── Register ALL routes before Application.init freezes the responder ────
         configureRoutes(router, database, embeddingModelProvider: embeddingModelProvider,
-                        graphExtractor: graphExtractor)
+                        graphExtractor: graphExtractor, stack: stack)
 
         // ── GRPC Server ────────────────────
         let grpcServer = ThreadGRPCServer()
         await grpcServer.start(database: database, embeddingProvider: embeddingModelProvider,
-                               graphExtractor: graphExtractor, host: host, grpcPort: grpcPort)
+                               graphExtractor: graphExtractor, host: host, grpcPort: grpcPort,
+                               stack: stack)
 
         // A Thread can dial a Sewn mothership and/or a Fleet destination. Both reuse
         // the same destination-agnostic dispatcher (it serves search/library/graph).
@@ -176,7 +207,7 @@ struct ThreadServer: AsyncParsableCommand {
                     requestDispatcher: dispatcher,
                     logger: SwiftLogConduitLogger(logger),
                     interceptors: Self.mothershipInterceptors(
-                        secret: StackSecret.value, mothershipHost: mothershipHost)
+                        secret: stack.singleSecret, mothershipHost: mothershipHost)
                 )
                 await client.startHeartbeatLoop()
                 registerAvailabilityRoute(router, registrationClient: client)
@@ -279,10 +310,17 @@ struct ThreadServer: AsyncParsableCommand {
 
         switch graphBackend {
         case "mistral":
-            let key = ProcessInfo.processInfo.environment["MISTRAL_API_KEY"] ?? ""
-            guard !key.isEmpty else {
-                logger.warning("Graph extraction: Mistral backend requested but MISTRAL_API_KEY is not set — falling back to keyword extraction.")
-                return KeywordGraphExtractionProvider()
+            let keys = ProviderKeyStore.process
+            let key = keys.value(for: ProviderKeyStore.mistralAPIKey) ?? ""
+            if key.isEmpty {
+                guard keys.isFileBacked else {
+                    logger.warning("Graph extraction: Mistral backend requested but MISTRAL_API_KEY is not set — falling back to keyword extraction.")
+                    return KeywordGraphExtractionProvider()
+                }
+                // A shared stack reads the key per call: a user who saves one
+                // after launch gets extraction without a restart. Until then
+                // each attempt fails and ingest keeps the keyword entities.
+                logger.warning("Graph extraction: no Mistral key yet in RAO_HOME/keys — extraction starts once one is saved.")
             }
             logger.info("Graph extraction: Mistral API (\(graphMistralModel))")
             return MistralGraphExtractionProvider(model: graphMistralModel, logger: logger)

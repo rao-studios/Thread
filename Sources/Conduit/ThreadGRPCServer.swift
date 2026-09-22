@@ -3,6 +3,7 @@ import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
 import Logging
+import RaoStack
 
 actor ThreadGRPCServer {
     private var serverTask: Task<Void, Error>?
@@ -12,7 +13,8 @@ actor ThreadGRPCServer {
         embeddingProvider: any EmbeddingProviding,
         graphExtractor: any GraphExtracting,
         host: String,
-        grpcPort: Int
+        grpcPort: Int,
+        stack: StackMode
     ) {
         let query   = ThreadQueryServiceImpl(database: database, embeddingProvider: embeddingProvider,
                                             graphExtractor: graphExtractor)
@@ -43,7 +45,7 @@ actor ThreadGRPCServer {
                 // and ExportCorpus among them — as StackSecretMiddleware does
                 // for HTTP. Hosted (no env var): nothing is installed.
                 interceptors: StackSecretServerInterceptor.forLocalMode(
-                    secret: StackSecret.value,
+                    secret: stack.singleSecret,
                     logger: SwiftLogConduitLogger(database.logger.base)))
             database.logger.info("ThreadGRPCServer", "gRPC server listening on \(host):\(grpcPort)", service: .startup)
             do {
