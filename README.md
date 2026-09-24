@@ -306,7 +306,7 @@ All services run on `--grpc-port` (default 9090) and are also reachable via the 
 
 | RPC | Request | Response | Description |
 |---|---|---|---|
-| `Search` | `ThreadSearchRequest` | `ThreadSearchResponse` | Hybrid KG + PQ search. Accepts raw `query_text` (Thread embeds it) or a precomputed `query_embedding`; optional `entities` gate the graph pre-filter. The response carries a `trace` describing entity matches and graph expansion. |
+| `Search` | `ThreadSearchRequest` | `ThreadSearchResponse` | Hybrid KG + PQ search. Accepts raw `query_text` (Thread embeds it) or a precomputed `query_embedding`; optional `entities` are graph match terms. `media_type = "code"` reads `entities` and the identifiers in `query_text` as code identifiers, matched exactly against entity names with the `sym:`/`type:`/`memory:` prefix stripped and applied as a per-document boost, never a gate, with no expansion, returning only code partitions; `"text"` returns only text partitions. Results are sorted by score and `top_k` is honoured. The response carries a `trace` with the matched entities' ids and names, the graph expansion, and the `media_type` applied. |
 | `Index` | `ThreadIndexRequest` | `ThreadIndexResponse` | Embed and index a batch of documents. Returns immediately; async write queue drains in the background. |
 | `Remove` | `ThreadRemoveRequest` | `ThreadRemoveResponse` | Remove specific document IDs, or all documents for an owner when `document_ids` is empty. |
 
@@ -398,11 +398,11 @@ Groups are logical collections owned by a single owner. Documents inside a group
 
 Each document is split into text chunks (partitions). Each partition gets a 1024-dimensional embedding. State lives in:
 
-- **PartitionIndex** — per-document index holding PQ-compressed vectors, an entity embedding, learned codebooks, entity linkage, and an optional metadata blob.
-- **PartitionTable** — flat map of document indices; search is a parallel per-document ADC scan with an entity pre-filter.
+- **PartitionIndex** — per-document index holding PQ-compressed vectors, learned codebooks, entity linkage, and an optional metadata blob.
+- **PartitionTable** — flat map of document indices; search is a parallel per-document ADC scan behind a graph pre-filter (prose) or a graph boost (code), ranked across documents.
 - **GraphStore** — the knowledge graph: content-addressed entities (`(kind, normalized name)` merges the same concept across documents), weighted relationships, and document-provenance sets that link the graph back to the vector store.
 
-At search time, query entities are matched against the graph (name tokens + embedding cosine), the entity pre-filter narrows candidates, the ADC scan ranks partitions, and a one-hop graph expansion pulls in documents linked to neighboring entities (scored with a small penalty so direct hits win ties).
+At search time a prose query is matched against the graph — entity names by token, relationships and predicates by embedding cosine — and the documents those matches are linked to become the candidates; the ADC scan ranks their partitions, and a one-hop graph expansion pulls in documents linked to neighboring entities (scored with a small penalty so direct hits win ties). A code query (`media_type = "code"`) instead matches identifiers exactly against entity names, lowers the distance of every document an identifier names (×0.85 each, floor ×0.6) without narrowing the candidates, and does not expand. Either way the results are sorted by distance and cut at `top_k`.
 
 Entities and relationships arrive with the request, or are extracted on-device by a small LLM (`--graph-model`, default Qwen3-1.7B-4bit) in a detached post-response pass — keyword entities serve as the always-available fallback.
 
@@ -476,7 +476,7 @@ Indexes one or more documents. Each document's text is embedded and PQ-compresse
 | `thread.group` | Group | No | Assigns all documents in this batch to a named group. |
 | `sanitize` | Bool | No | When `true`, passes each input through `TextChunker` before embedding. Default: `false`. |
 | `tags` | `[[String]]` | No | Per-document tag hints. Outer index aligns 1:1 with `inputs`. Auto-generated if empty. |
-| `media_type` | String | No | `"text"` (default) or `"image"`. |
+| `media_type` | String | No | `"text"` (default), `"image"` or `"code"`. |
 
 **Response**
 
@@ -515,10 +515,12 @@ Searches indexed documents for the closest matching partitions to a query string
 | `query` | String | Yes | Natural language query. Embedded at search time. |
 | `thread.owner_id` | String | Yes | Scopes the search to this owner's documents by default. |
 | `thread.scope` | `"personal" \| "global"` | No | `personal` (default): only the owner's documents. `global`: all `.available` documents. |
-| `thread.aggregate` | Bool | No | When `true`, also searches groups the owner has access to. |
+| `thread.aggregate` | Bool | No | When `true`, searches all of the owner's documents and ignores `group`/`groups`. |
 | `thread.group` | Group | No | Restricts search to a specific group. |
 | `thread.groups` | [Group] | No | Restricts search to a list of groups. |
-| `thread.tags` | [String] | No | Tag filter: only documents whose tag embedding is within threshold are considered. |
+| `thread.entities` | [String] | No | Graph match terms (`thread.tags` is a legacy alias). |
+| `thread.media_type` | String | No | `"code"` or `"text"`, as for `ThreadSearchRequest.media_type`. |
+| `thread.top_k` | Int | No | The most partitions to return, across documents. |
 
 **Response**
 
@@ -784,7 +786,7 @@ flowchart LR
 - **No authentication.** `owner_id` is taken directly from the request body. Use a reverse proxy (nginx, Caddy) with bearer token enforcement if you expose this to the internet.
 - **Persistence.** The table, graph, and registry are persisted as plist snapshots under the data directory. Do not delete these while the server is running.
 - **Deduplication.** Document IDs are SHA-256 hashes of their content. Submitting the same text twice under a different owner links the second owner to the existing vectors — no re-embedding occurs.
-- **Tag auto-generation.** If no `tags` are supplied, `TagGenerator` derives frequency-weighted keywords from the text. These are embedded separately and used as a pre-filter during search.
+- **Tag auto-generation.** If no `tags` are supplied, `TagGenerator` derives frequency-weighted keywords from the text. They become concept entities, matched by name during a prose search.
 - **Distributed mode.** In distributed mode all fan-out goes through the gRPC session stream. The HTTP routes remain available for direct use and debugging. Multiple Thread nodes can run simultaneously; Sewn fans search queries to all active nodes in parallel and merges results.
 
 ---

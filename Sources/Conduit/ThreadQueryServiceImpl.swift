@@ -39,7 +39,9 @@ final class ThreadQueryServiceImpl: Thread_V1_ThreadQuery.SimpleServiceProtocol,
             groups: groups,
             entities: request.entities.isEmpty ? nil : Array(request.entities),
             aggregate: request.aggregate,
-            scope: request.scope == "global" ? .global : .personal
+            scope: request.scope == "global" ? .global : .personal,
+            mediaType: request.mediaType.isEmpty ? nil : MediaType(wire: request.mediaType),
+            topK: request.topK > 0 ? Int(request.topK) : nil
         )
 
         var embedMs = 0
@@ -77,7 +79,8 @@ final class ThreadQueryServiceImpl: Thread_V1_ThreadQuery.SimpleServiceProtocol,
             .sorted()
             .joined(separator: ", ")
         var predicateFloats: [Float] = []
-        if !predicateHint.isEmpty {
+        // A code search's entities are identifiers, not predicates: no second embedding.
+        if !predicateHint.isEmpty, !databaseReq.isCode {
             let embedStart = Date()
             if let (embeds, _) = try? await embeddingProvider.run(
                 ["Relationship predicates: \(predicateHint)"],
@@ -100,7 +103,14 @@ final class ThreadQueryServiceImpl: Thread_V1_ThreadQuery.SimpleServiceProtocol,
         let matchedEntityIds: Set<EntityID>
         let matchedRelationshipIds: Set<RelationshipID>
         let matchedPredicateIds: Set<PredicateID>
-        if let graph = database.graph, !graph.entities.isEmpty {
+        var identifierScores: [EntityID: Float] = [:]
+        if databaseReq.isCode {
+            identifierScores = database.identifierScores(queryText: request.queryText,
+                                                         entities: Array(request.entities))
+            matchedEntityIds = Set(identifierScores.keys)
+            matchedRelationshipIds = []
+            matchedPredicateIds = []
+        } else if let graph = database.graph, !graph.entities.isEmpty {
             let entityQuery = ([request.queryText] + request.entities).joined(separator: " ")
             matchedEntityIds = Set(graph.matchEntities(nameQuery: entityQuery).map { $0.entity.id })
             let primary = graph.matchRelationships(embedding: queryFloats, seededBy: matchedEntityIds)
@@ -117,12 +127,13 @@ final class ThreadQueryServiceImpl: Thread_V1_ThreadQuery.SimpleServiceProtocol,
         }
 
         let result = await withCheckedContinuation { (cont: CheckedContinuation<Database.SearchResult, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async { [database, databaseReq, queryData] in
+            DispatchQueue.global(qos: .userInitiated).async { [database, databaseReq, queryData, identifierScores] in
                 cont.resume(returning: database.search(
                     queryData,
                     matchedEntityIds: matchedEntityIds,
                     matchedRelationshipIds: matchedRelationshipIds,
                     matchedPredicateIds: matchedPredicateIds,
+                    identifierScores: identifierScores,
                     database: databaseReq
                 ))
             }
@@ -145,12 +156,17 @@ final class ThreadQueryServiceImpl: Thread_V1_ThreadQuery.SimpleServiceProtocol,
             t.matchedEntityIds = trace.matchedEntityIds
             t.expansionEdgeIds = trace.expansionEdges
             t.expandedDocumentCount = Int32(trace.expandedDocumentCount)
+            t.matchedEntityNames = trace.matchedEntityNames
+            t.mediaType = trace.mediaType
             response.trace = t
         }
         let totalMs = Int(Date().timeIntervalSince(rpcStart) * 1000)
+        let instrument = databaseReq.isCode
+            ? " instrument=code matched=\(matchedEntityIds.count) boosted=\(result.trace?.boostedDocumentCount ?? 0)"
+            : ""
         database.logger.info(
             nil,
-            "[timing] search rpc=\(totalMs)ms embed=\(embedMs)ms cache_hits=\(cacheHits) other=\(totalMs - embedMs)ms results=\(response.results.count)")
+            "[timing] search rpc=\(totalMs)ms embed=\(embedMs)ms cache_hits=\(cacheHits) other=\(totalMs - embedMs)ms results=\(response.results.count)\(instrument)")
         return response
     }
 

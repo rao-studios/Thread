@@ -45,9 +45,12 @@ extension ThreadLogger {
 extension DatabaseRequest {
     static func test(
         ownerId: String = "test-owner",
-        scope: DatabaseRequestScope? = .personal
+        scope: DatabaseRequestScope? = .personal,
+        mediaType: MediaType? = nil,
+        topK: Int? = nil
     ) -> DatabaseRequest {
-        DatabaseRequest(ownerId: ownerId, group: nil, aggregate: nil, scope: scope, requestID: nil)
+        DatabaseRequest(ownerId: ownerId, group: nil, aggregate: nil, scope: scope, requestID: nil,
+                        mediaType: mediaType, topK: topK)
     }
 }
 

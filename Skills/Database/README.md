@@ -56,7 +56,6 @@ Holds everything for one document:
 - Lean slots (PQ codes + IDs — text lives on disk in `documents/{id}-parts`)
 - Learned codebooks (trained from the document's own partitions)
 - `entityIds` — graph entities this document contributes provenance to
-- `entityEmbedding` — exact embedding of the joined entity names (entity pre-filter)
 - Optional metadata blob
 
 ---
@@ -65,11 +64,11 @@ Holds everything for one document:
 
 `GraphStore` is a Spanner-Graph-style projection over the corpus: entities and relationships are plain records with inverted document-provenance indexes, persisted as one plist alongside the table.
 
-- **Entity** — content-addressed by `(kind, normalized name)`, so the same concept across documents merges into one node. Carries a raw embedding of `"kind: name"` and a `documentIds` provenance set.
+- **Entity** — content-addressed by `(kind, normalized name)`, so the same concept across documents merges into one node. Carries a `documentIds` provenance set and no embedding (relationships and predicates carry embeddings).
 - **Relationship** — directed typed edge `subject —predicate→ object`; `weight` increments each time the same triple is observed.
 - **Adjacency** — derived index, rebuilt on decode (never persisted, never stale).
 
-Key operations: `upsert(payload, documentId)` (merge a document's extracted graph), `detach` (remove provenance + garbage-collect empty nodes/edges), `matchEntities` (name-token containment or cosine ≥ 0.15), `neighborhood(seeds, hops)` (BFS), `documents(linkedTo:)`.
+Key operations: `upsert(payload, documentId)` (merge a document's extracted graph), `detach` (remove provenance + garbage-collect empty nodes/edges), `matchEntities` (name-token containment; the prose instrument), `matchRelationships` (embedding cosine ≥ 0.15), `matchIdentifiers` (exact identifier match with the namespace stripped; the code instrument, `GraphStore+Identifiers.swift`), `neighborhood(seeds, hops)` (BFS), `documents(linkedTo:)`.
 
 Entity/relationship extraction happens at ingest: caller-provided payloads, keyword fallback (`TagGenerator`), or on-device LLM extraction (`MLXGraphExtractionProvider`, Qwen3-1.7B-4bit) in a detached post-response task — see `GraphEnrichment`.
 
@@ -91,12 +90,13 @@ Entity/relationship extraction happens at ingest: caller-provided payloads, keyw
 ## Search Flow (hybrid KG + vector)
 
 1. `Database+Search.search(request:)` receives a query text or precomputed embedding. If text: embed via `EmbeddingModelProvider`.
-2. Match query entities against the graph (name tokens + content-vector cosine) → `matchedEntityIds`.
+2. Match the graph. Prose: entity names by token → `matchedEntityIds`, relationships and predicates by cosine → `matchedRelationshipIds`. Code (`media_type = code`): identifiers exactly → a score per matched entity.
 3. Candidate documents from scope (owner / group / global).
-4. **Entity pre-filter**: documents linked to a matched entity — or whose entity embedding is close to the query's entity embedding — pass; documents with no entities always pass.
+4. **Graph pre-filter (prose)**: candidates narrow to documents linked to matched relationships, else to matched entities; documents with no link are dropped. **Graph boost (code)**: no narrowing; each document an identifier names has its distance multiplied by 0.85 per identifier, floor 0.6.
 5. **Parallel ADC scan** over the candidates (`concurrentPerform`), k per document.
-6. **One-hop graph expansion**: documents linked to neighbors of the result/query entities are pulled in, ranked by summed edge weight, scored with a ×1.1 penalty so a graph-reached hit never outranks an equally-close direct hit.
-7. Return partitions + scores + `GraphSearchTrace` (matched entities, expansion edges, expanded doc count).
+6. **One-hop graph expansion** (prose only): documents linked to neighbors of the result/query entities are pulled in, ranked by summed edge weight, scored with a ×1.1 penalty so a graph-reached hit never outranks an equally-close direct hit.
+7. A named `media_type` keeps only its partitions; everything is sorted by distance and cut at `top_k`.
+8. Return partitions + scores + `GraphSearchTrace` (matched entity ids and names, expansion edges, expanded doc count, the `media_type` applied).
 
 ---
 
@@ -123,4 +123,4 @@ Entity/relationship extraction happens at ingest: caller-provided payloads, keyw
 | [PartitionIndex.swift](../../Sources/Database/PartitionTable/PartitionIndex.swift) | Per-document index |
 | [PartitionQuantizer.swift](../../Sources/Database/PartitionTable/PartitionQuantizer.swift) | PQ codebooks and ADC |
 | [GraphStore.swift](../../Sources/Database/Graph/GraphStore.swift) | Knowledge graph: entities, relationships, traversal |
-| [GraphEnrichment.swift](../../Sources/Providers/GraphEnrichment.swift) | Detached LLM extraction + entity embedding |
+| [GraphEnrichment.swift](../../Sources/Providers/GraphEnrichment.swift) | Detached LLM extraction + relationship and predicate embedding |

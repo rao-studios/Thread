@@ -57,7 +57,7 @@ Indexes one or more documents. Each document's text is embedded and PQ-compresse
 | `thread.group` | No | Assigns all documents in this batch to a named group. |
 | `sanitize` | No | When `true`, passes each input through `TextChunker`. Default: `false`. |
 | `tags` | No | Per-document tag hints. Outer index aligns 1:1 with `inputs`. Auto-generated if empty. |
-| `media_type` | No | `"text"` (default) or `"image"`. |
+| `media_type` | No | `"text"` (default), `"image"` or `"code"`. |
 
 File: [BatchEmbeddings.swift](../../Sources/API/Routes/BatchEmbeddings.swift)
 
@@ -85,9 +85,11 @@ Searches indexed documents for the closest matching partitions to a query string
 | `query` | Yes | Natural language query. Embedded at search time. |
 | `thread.owner_id` | Yes | Scopes the search to this owner's documents. |
 | `thread.scope` | No | `personal` (default) or `global` (all `.available` documents). |
-| `thread.aggregate` | No | Also searches groups the owner has access to. |
+| `thread.aggregate` | No | Searches all of the owner's documents and ignores `group`/`groups`. |
 | `thread.group` / `thread.groups` | No | Restrict search to specific groups. |
-| `thread.tags` | No | Tag pre-filter — only partitions within tag embedding threshold are considered. |
+| `thread.entities` | No | Graph match terms (`thread.tags` is a legacy alias). |
+| `thread.media_type` | No | `code` (identifier boost, code partitions only) or `text` (text partitions only). |
+| `thread.top_k` | No | The most partitions to return, across documents. |
 
 **Response**
 

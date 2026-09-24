@@ -5,6 +5,7 @@ extension Database {
                 matchedEntityIds: Set<EntityID> = [],
                 matchedRelationshipIds: Set<RelationshipID> = [],
                 matchedPredicateIds: Set<PredicateID> = [],
+                identifierScores: [EntityID: Float] = [:],
                 expand: Bool = true,
                 database: DatabaseRequest) -> SearchResult {
         guard let table = self.table else {
@@ -34,6 +35,7 @@ extension Database {
                                           matchedEntityIds: matchedEntityIds,
                                           matchedRelationshipIds: matchedRelationshipIds,
                                           matchedPredicateIds: matchedPredicateIds,
+                                          identifierScores: identifierScores,
                                           graph: graphStore,
                                           expand: expand,
                                           sinatra: sinatra,
@@ -53,8 +55,7 @@ extension Database {
     nonisolated func search(_ query: String?,
                 request: DatabaseRequest,
                 embeddingModelProvider: (any EmbeddingProviding)?,
-                expand: Bool = true,
-                topK: Int = 3) async throws -> SearchChatResult {
+                expand: Bool = true) async throws -> SearchChatResult {
         guard let query else {
             logger.info("Search", "No query to search.", service: .database, request: request, flow: .chat)
             return SearchChatResult(context: [], adjustments: [], references: [])
@@ -66,7 +67,13 @@ extension Database {
         let matchedEntityIds: Set<EntityID>
         let matchedRelationshipIds: Set<RelationshipID>
         let matchedPredicateIds: Set<PredicateID>
-        if let graph = self.graph, !graph.entities.isEmpty {
+        var identifierScores: [EntityID: Float] = [:]
+        if request.isCode {
+            identifierScores = self.identifierScores(queryText: query, entities: requestEntities)
+            matchedEntityIds = Set(identifierScores.keys)
+            matchedRelationshipIds = []
+            matchedPredicateIds = []
+        } else if let graph = self.graph, !graph.entities.isEmpty {
             let queryVector: [Float]? = queryEmbedding.first.flatMap {
                 if case .floats(let v) = $0.embedding { return v }
                 return nil
@@ -90,6 +97,7 @@ extension Database {
                                     matchedEntityIds: matchedEntityIds,
                                     matchedRelationshipIds: matchedRelationshipIds,
                                     matchedPredicateIds: matchedPredicateIds,
+                                    identifierScores: identifierScores,
                                     expand: expand,
                                     database: request)
                 continuation.resume(returning: r)
@@ -112,6 +120,20 @@ extension Database {
             partitions: partitions,
             trace: result.trace
         )
+    }
+
+    /// The code instrument's graph signal: the identifiers a query names, matched exactly
+    /// against entity names, as a score per matched entity. Hubs are skipped: an entity in
+    /// more documents than the extraction policy's hub cap, or a twentieth of the node,
+    /// names nothing in particular.
+    nonisolated func identifierScores(queryText: String, entities: [String]) -> [EntityID: Float] {
+        guard let graph = self.graph, !graph.entities.isEmpty else { return [:] }
+        let terms = GraphStore.identifierTerms(queryText: queryText, entities: entities)
+        guard !terms.isEmpty else { return [:] }
+        let documentCount = self.table?.keys.count ?? 0
+        let hubDegreeCap = max(ExtractionPolicyStore.current.hubDegreeCap ?? 24, documentCount / 20)
+        let matches = graph.matchIdentifiers(terms, hubDegreeCap: hubDegreeCap)
+        return Dictionary(matches.map { ($0.entity.id, $0.score) }, uniquingKeysWith: max)
     }
 
     /// Embeds a batch of strings using the on-device / API provider, or the direct Mistral

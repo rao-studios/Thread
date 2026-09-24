@@ -15,6 +15,12 @@ struct GraphSearchTrace {
     var matchedPredicateIds: [PredicateID] = []
     var expansionEdges: [RelationshipID] = []
     var expandedDocumentCount: Int = 0
+    /// Stored names of `matchedEntityIds`, parallel by index.
+    var matchedEntityNames: [String] = []
+    /// The media type the search applied; empty when the request named none.
+    var mediaType: String = ""
+    /// Documents whose distance the code instrument lowered.
+    var boostedDocumentCount: Int = 0
 }
 
 /// A table stores documents as per-document PQ indices. Vector search is a parallel ADC
@@ -73,6 +79,7 @@ struct PartitionTable: Codable {
                 matchedEntityIds: Set<EntityID> = [],
                 matchedRelationshipIds: Set<RelationshipID> = [],
                 matchedPredicateIds: Set<PredicateID> = [],
+                identifierScores: [EntityID: Float] = [:],
                 graph: GraphStore? = nil,
                 expand: Bool = true,
                 k: Int = 3,
@@ -110,31 +117,66 @@ struct PartitionTable: Codable {
             }
         }
 
-        if let graph, !matchedRelationshipIds.isEmpty {
-            candidateIds.formIntersection(graph.documents(linkedToRelationships: matchedRelationshipIds))
-        } else if !matchedEntityIds.isEmpty {
-            let entityDocuments = Set(indices.compactMap { docId, index in
-                Set(index.entityIds).isDisjoint(with: matchedEntityIds) ? nil : docId
-            })
-            candidateIds.formIntersection(entityDocuments)
+        // The prose instrument gates: only documents linked to what matched are scanned.
+        // The code instrument never gates — a match is evidence, not a precondition — so
+        // a memory or a card that names nothing is still ranked by its distance.
+        if !request.isCode {
+            if let graph, !matchedRelationshipIds.isEmpty {
+                candidateIds.formIntersection(graph.documents(linkedToRelationships: matchedRelationshipIds))
+            } else if !matchedEntityIds.isEmpty {
+                let entityDocuments = Set(indices.compactMap { docId, index in
+                    Set(index.entityIds).isDisjoint(with: matchedEntityIds) ? nil : docId
+                })
+                candidateIds.formIntersection(entityDocuments)
+            }
+        }
+
+        // Code: every document an identifier names gets its distance lowered, the more
+        // identifiers the further, down to a floor.
+        var boost: [DocumentID: Float] = [:]
+        if request.isCode, let graph, !identifierScores.isEmpty {
+            var weight: [DocumentID: Float] = [:]
+            for (entityId, score) in identifierScores {
+                for docId in graph.entities[entityId]?.documentIds ?? [] where candidateIds.contains(docId) {
+                    weight[docId, default: 0] += score
+                }
+            }
+            boost = weight.mapValues { max(Self.identifierBoostFloor, pow(Self.identifierBoostStep, $0)) }
         }
 
         let directResults = scan(candidateIds, embedding: embedding, k: k, sinatra: sinatra,
                                  sinatraRegistry: sinatraRegistry, registry: registry,
                                  request: request, metadataLoader: metadataLoader, logger: logger)
         for (result, adjustment) in directResults {
+            var result = result
+            if let docId = result.partitions.first?.documentId, let factor = boost[docId] {
+                result.scores = result.scores.map { $0 * factor }
+            }
             aggregated.append(result)
             if let adjustment { adjustments.append(adjustment) }
         }
 
-        var trace: GraphSearchTrace? = (matchedEntityIds.isEmpty && matchedRelationshipIds.isEmpty)
-            ? nil
-            : GraphSearchTrace(
-                matchedEntityIds: Array(matchedEntityIds),
+        let orderedEntityIds = Array(matchedEntityIds)
+        func makeTrace(expansionEdges: [RelationshipID] = [], expandedDocumentCount: Int = 0) -> GraphSearchTrace {
+            GraphSearchTrace(
+                matchedEntityIds: orderedEntityIds,
                 matchedRelationshipIds: Array(matchedRelationshipIds),
-                matchedPredicateIds: Array(matchedPredicateIds)
+                matchedPredicateIds: Array(matchedPredicateIds),
+                expansionEdges: expansionEdges,
+                expandedDocumentCount: expandedDocumentCount,
+                matchedEntityNames: orderedEntityIds.map { graph?.entities[$0]?.name ?? "" },
+                mediaType: request.mediaType?.rawValue ?? "",
+                boostedDocumentCount: boost.count
             )
-        if expand, let graph, !graph.entities.isEmpty {
+        }
+        // A code search always says what it applied, even when nothing matched: that echo
+        // is how a client tells this node from one that ignored the spec.
+        var trace: GraphSearchTrace? = (matchedEntityIds.isEmpty && matchedRelationshipIds.isEmpty && !request.isCode)
+            ? nil
+            : makeTrace()
+        // Expansion reaches whatever the result documents' entities touch; for code that is
+        // every file importing the same module, so the code instrument does not expand.
+        if expand, !request.isCode, let graph, !graph.entities.isEmpty {
             let resultDocs = Set(aggregated.flatMap { $0.partitions.map { $0.documentId } })
             var seedEntities = matchedEntityIds.union(graph.endpointIds(for: matchedRelationshipIds))
             for docId in resultDocs {
@@ -170,15 +212,22 @@ struct PartitionTable: Codable {
                 if !expandedPartitions.isEmpty {
                     aggregated.append((scores: expandedScores, partitions: expandedPartitions))
                 }
-                trace = GraphSearchTrace(
-                    matchedEntityIds: Array(matchedEntityIds),
-                    matchedRelationshipIds: Array(matchedRelationshipIds),
-                    matchedPredicateIds: Array(matchedPredicateIds),
-                    expansionEdges: Array(nbrEdges),
-                    expandedDocumentCount: expandedPartitions.count
-                )
+                trace = makeTrace(expansionEdges: Array(nbrEdges), expandedDocumentCount: expandedPartitions.count)
             }
         }
+
+        // A named media type keeps only its own partitions. The scan has already read
+        // each partition's type, so this costs nothing; without a loader the type is
+        // unknown and nothing is dropped.
+        if let wanted = request.mediaType, metadataLoader != nil {
+            aggregated = aggregated.compactMap { block in
+                let kept = zip(block.scores, block.partitions).filter { $0.1.mediaType == wanted }
+                return kept.isEmpty ? nil : (scores: kept.map(\.0), partitions: kept.map(\.1))
+            }
+        }
+
+        // One ranking for the whole search, closest first, cut at top_k when one was asked.
+        aggregated = Self.ranked(aggregated, limit: request.resultLimit)
 
         let elapsedTime = Date().timeIntervalSince(startTime) * 1000
         let totalPartitions = aggregated.reduce(0) { $0 + $1.partitions.count }
@@ -204,6 +253,25 @@ struct PartitionTable: Codable {
         }
 
         return (aggregated, adjustments, trace)
+    }
+
+    // MARK: - Ranking
+
+    /// One identifier multiplies a document's distance by this; each further one again.
+    static let identifierBoostStep: Float = 0.85
+    /// However many identifiers name a document, its distance keeps at least this share.
+    static let identifierBoostFloor: Float = 0.6
+
+    /// Every block flattened into one, ascending by distance, ties in arrival order, cut
+    /// at `limit`.
+    static func ranked(_ blocks: [PartitionSearchResult], limit: Int?) -> [PartitionSearchResult] {
+        var all = blocks.flatMap { zip($0.scores, $0.partitions) }.enumerated().map { ($0.offset, $0.element) }
+        all.sort { lhs, rhs in
+            lhs.1.0 == rhs.1.0 ? lhs.0 < rhs.0 : lhs.1.0 < rhs.1.0
+        }
+        if let limit { all = Array(all.prefix(limit)) }
+        guard !all.isEmpty else { return [] }
+        return [(scores: all.map { $0.1.0 }, partitions: all.map { $0.1.1 })]
     }
 
     // MARK: - Private
