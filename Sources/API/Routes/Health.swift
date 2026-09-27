@@ -16,9 +16,45 @@ struct HealthResponse: ResponseCodable {
     let app: String?
     /// The shared-stack contract this build speaks; absent when open.
     let contract: Int?
+    /// The embedding model and the index it writes. Absent when unknown. Launchers
+    /// read it to show a first-run download and a model change.
+    let embedder: HealthEmbedder?
 }
 
-func registerHealthRoute(_ app: some RouterMethods<ThreadRequestContext>, stack: StackMode) {
+/// What `/health` says about embedding: the model, whether it can answer yet, and
+/// whether the stored index was written by it (EmbedderStamp.swift).
+struct HealthEmbedder: Codable, Sendable, Equatable {
+    let model: String?
+    let revision: String?
+    let vectorSpace: String?
+    /// idle · downloading · loading · ready · failed ("ready" for a hosted API).
+    let phase: String
+    /// 0…1 while downloading.
+    let progress: Double?
+    let error: String?
+    /// matches · mismatch · unstamped; absent before the table is reconciled.
+    let index: String?
+    /// The space the index was built with, when it is not this one.
+    let indexedWith: String?
+
+    init(provider: any EmbeddingProviding, index: IndexState?) {
+        let health = provider.health
+        self.model = health?.model
+        self.revision = health?.revision
+        self.vectorSpace = health?.vectorSpace ?? provider.vectorSpace
+        self.phase = health?.phase.rawValue ?? EmbedderHealth.Phase.ready.rawValue
+        self.progress = health?.progress
+        self.error = health?.error
+        self.index = index?.label
+        self.indexedWith = index?.stampedSpace
+    }
+}
+
+func registerHealthRoute(
+    _ app: some RouterMethods<ThreadRequestContext>,
+    stack: StackMode,
+    embedder: @escaping @Sendable () async -> HealthEmbedder? = { nil }
+) {
     app.get("/health") { request, _ async throws -> HealthResponse in
         // X-Rao-App is ignored: a Thread proves the one secret it was given.
         let answer = stack.healthAnswer(nonce: request.headers[.ambientNonce], requestedApp: nil)
@@ -28,7 +64,8 @@ func registerHealthRoute(_ app: some RouterMethods<ThreadRequestContext>, stack:
             stack: answer.stack,
             proof: answer.proof,
             app: answer.app?.rawValue,
-            contract: answer.contract
+            contract: answer.contract,
+            embedder: await embedder()
         )
     }
 }

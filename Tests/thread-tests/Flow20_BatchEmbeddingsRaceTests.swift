@@ -217,7 +217,7 @@ final class Flow20_BatchEmbeddingsRaceTests: XCTestCase {
 
         func acquirePreprocessSlot() async { acquired += 1 }
         func releasePreprocessSlot() async { released += 1 }
-        func run(_ texts: [String], logger: Logger, priority: Bool) async throws
+        func run(_ texts: [String], logger: Logger, role: EmbeddingRole) async throws
             -> (result: [EmbeddingData], usage: Requests.Embedding.Get.Result.Usage) {
             ([], Requests.Embedding.Get.Result.Usage(
                 promptAudioSeconds: nil, promptTokens: 0, totalTokens: 0,

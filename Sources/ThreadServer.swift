@@ -5,6 +5,9 @@ import GRPCCore
 import Logging
 import Hummingbird
 import RaoStack
+#if canImport(MLX)
+import Frigate
+#endif
 #if canImport(Glibc)
 import Glibc
 #elseif canImport(Darwin)
@@ -42,7 +45,9 @@ func configureRoutes(
     graphExtractor: any GraphExtracting,
     stack: StackMode
 ) {
-    registerHealthRoute(router, stack: stack)
+    registerHealthRoute(router, stack: stack) {
+        HealthEmbedder(provider: embeddingModelProvider, index: await database.indexState)
+    }
     registerSearchRoute(router, database, embeddingModelProvider: embeddingModelProvider)
     registerBatchEmbeddingsRoute(router, database, embeddingModelProvider: embeddingModelProvider,
                                  graphExtractor: graphExtractor)
@@ -73,8 +78,8 @@ struct ThreadServer: AsyncParsableCommand {
     @ArgumentParser.Flag(name: .long, help: "Use on-device MLX embedding model instead of Mistral API.")
     var useMLX: Bool = false
 
-    @ArgumentParser.Option(name: .long, help: "MLX Hub model ID for on-device embeddings.")
-    var mlxModel: String = "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
+    @ArgumentParser.Option(name: .long, help: "On-device embedding model: a Hub repo (org/repo[@revision]) or a snapshot directory.")
+    var mlxModel: String = FrigateEmbedder.Profile.voyage4NanoRepo
 
     @ArgumentParser.Option(name: .long, help: "MLX Hub model ID for on-device graph extraction.")
     var graphModel: String = "mlx-community/Qwen3-1.7B-4bit"
@@ -150,6 +155,20 @@ struct ThreadServer: AsyncParsableCommand {
         let database = Database(nodeId: fixedNodeId)
         let embeddingModelProvider: any EmbeddingProviding = makeEmbeddingProvider()
         let graphExtractor: any GraphExtracting = makeGraphExtractor()
+
+        // Fetch and load the embedder now: a first run downloads it, and the first
+        // filing should not be what waits. Then hold the table against its stamp.
+        Task.detached { await embeddingModelProvider.warmup() }
+        Task {
+            await database.initializationTask.value
+            if let space = embeddingModelProvider.vectorSpace {
+                let health = embeddingModelProvider.health
+                await database.reconcileEmbedder(
+                    vectorSpace: space,
+                    model: health?.model ?? space,
+                    revision: health?.revision)
+            }
+        }
 
         // ── Router + middleware ───────────────────────────────────────────────────
         let router = Router(context: ThreadRequestContext.self)

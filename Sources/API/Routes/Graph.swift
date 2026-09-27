@@ -17,7 +17,7 @@ func registerGraphRoute(
         var queryVector: [Float]?
         if let query = graphReq.query, !query.isEmpty {
             let embeds = try await StandaloneGeneration.runEmbedding(
-                [query], modelProvider: embeddingModelProvider, logger: database.logger.base, priority: true
+                [query], modelProvider: embeddingModelProvider, logger: database.logger.base, role: .query
             )
             if case .floats(let v) = embeds.first?.embedding { queryVector = v }
         }

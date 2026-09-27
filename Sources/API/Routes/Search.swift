@@ -8,6 +8,9 @@ func registerSearchRoute(
 ) {
     app.post("/v1/search") { request, context async throws -> SearchResponse in
         let searchRequest = try await request.decode(as: SearchRequest.self, context: context)
+        if await database.vectorRefusal() != nil {
+            return .init(texts: [], references: [], graph: nil)
+        }
         let searchReqId = "search-\(UUID().uuidString)"
 
         context.logger.info("Received search request (ID: \(searchReqId)) for model: \(searchRequest.model ?? "Default")")

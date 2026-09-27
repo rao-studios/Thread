@@ -16,16 +16,18 @@ import GRPCCore
 import Logging
 @testable import thread
 
-/// Records every text it is asked to embed.
+/// Records every text it is asked to embed, and what for.
 actor RecordingEmbeddingProvider: EmbeddingProviding {
     private(set) var embedded: [String] = []
+    private(set) var roles: [EmbeddingRole] = []
 
     func acquirePreprocessSlot() async {}
     func releasePreprocessSlot() async {}
 
-    func run(_ texts: [String], logger: Logger, priority: Bool)
+    func run(_ texts: [String], logger: Logger, role: EmbeddingRole)
         async throws -> (result: [EmbeddingData], usage: Requests.Embedding.Get.Result.Usage) {
         embedded += texts
+        roles += Array(repeating: role, count: texts.count)
         let result = texts.enumerated().map { i, text in
             EmbeddingData(embedding: .floats(Self.vector(for: text)), index: i)
         }
@@ -302,6 +304,33 @@ final class Flow23_CallerDescribedPartitionsTests: XCTestCase {
         let results = try await stack.query.search(request: search, context: ctx).results
         XCTAssertEqual(Set(results.map(\.documentID)), ["doc-1024"],
                        "the 512-d document is not comparable, so it scores nothing rather than reading past its codebook")
+        await stack.database.shutdown()
+    }
+
+    // MARK: - Roles
+
+    /// An asymmetric embedder prompts queries and documents differently, so each
+    /// path must say which it is: filing embeds documents, searching embeds a query.
+    func testIndexingEmbedsDocumentsAndSearchEmbedsAQuery() async throws {
+        let stack = await makeStack()
+        var item = Thread_V1_ThreadIndexItem()
+        item.documentID = "doc-roles"
+        item.texts = ["lichens are a fungus and an alga", "they grow on bare rock"]
+        _ = try await stack.query.index(request: indexRequest(item), context: ctx)
+        await waitForIndexed("doc-roles", in: stack.database)
+        let filed = await stack.provider.roles
+        XCTAssertFalse(filed.isEmpty)
+        XCTAssertTrue(filed.allSatisfy { $0 == .document }, "filed as \(filed)")
+
+        var search = Thread_V1_ThreadSearchRequest()
+        search.ownerID = owner
+        search.queryText = "what grows on rock?"
+        search.groupIds = ["identity"]
+        _ = try await stack.query.search(request: search, context: ctx)
+        let all = await stack.provider.roles
+        let embedded = await stack.provider.embedded
+        let queryRoles = zip(embedded, all).filter { $0.0 == "what grows on rock?" }.map(\.1)
+        XCTAssertEqual(queryRoles, [.query])
         await stack.database.shutdown()
     }
 

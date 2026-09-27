@@ -143,7 +143,7 @@ actor MockEmbeddingProvider: EmbeddingProviding {
     func run(
         _ texts: [String],
         logger: Logger,
-        priority: Bool
+        role: EmbeddingRole
     ) async throws -> (result: [EmbeddingData], usage: Requests.Embedding.Get.Result.Usage) {
         let embeddings = texts.enumerated().map { (i, _) -> EmbeddingData in
             let seed = UInt64(i + callCount * 1000 + 99000)

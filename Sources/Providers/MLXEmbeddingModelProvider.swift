@@ -8,14 +8,16 @@ import Frigate
 /// Activated with `--use-mlx` at server startup. Falls back to `EmbeddingModelProvider`
 /// (Mistral API) when the flag is absent.
 ///
-/// All GPU work (model load, tokenization scheduling, batching, allocator
+/// All GPU work (download, model load, prompts, tokenization, batching, allocator
 /// hygiene) lives in `FrigateEmbedder` — one code path shared with every other
 /// Frigate host. This provider adds Thread's `EmbeddingProviding` surface:
-/// preprocess slots and the `EmbeddingData`/usage response shapes.
+/// preprocess slots, the `EmbeddingData`/usage response shapes, and readiness.
+///
+/// Queries do not wait behind indexing here: `FrigateEmbedder` takes its model
+/// lock per sub-batch, so a query lands between two sub-batches of a long filing.
 actor MLXEmbeddingModelProvider: EmbeddingProviding {
     private let embedder: FrigateEmbedder
     private var loggedModelReady = false
-    private let modelId: String
 
     // MARK: - Preprocessing slots (mirrors EmbeddingModelProvider)
 
@@ -23,9 +25,30 @@ actor MLXEmbeddingModelProvider: EmbeddingProviding {
     private var preprocessActiveCount = 0
     private var preprocessWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(modelId: String = "mlx-community/Qwen3-Embedding-0.6B-8bit") {
-        self.modelId = modelId
+    /// `org/repo`, `org/repo@<revision>` or a snapshot directory; see `FrigateEmbedder.Profile`.
+    init(modelId: String = FrigateEmbedder.Profile.voyage4NanoRepo) {
         self.embedder = FrigateEmbedder(modelId: modelId)
+    }
+
+    nonisolated var vectorSpace: String? { embedder.profile.vectorSpace }
+
+    nonisolated var health: EmbedderHealth? {
+        let status = embedder.status
+        return EmbedderHealth(
+            model: status.model,
+            revision: status.revision,
+            vectorSpace: status.vectorSpace,
+            phase: EmbedderHealth.Phase(rawValue: status.phase.rawValue) ?? .idle,
+            progress: status.fraction,
+            error: status.error)
+    }
+
+    func warmup() async {
+        do {
+            try await embedder.warmup()
+        } catch {
+            // Reported through `health`; the next request tries again.
+        }
     }
 
     // MARK: - EmbeddingProviding
@@ -33,15 +56,21 @@ actor MLXEmbeddingModelProvider: EmbeddingProviding {
     func run(
         _ texts: [String],
         logger: Logger,
-        priority: Bool = false
+        role: EmbeddingRole
     ) async throws -> (result: [EmbeddingData], usage: Requests.Embedding.Get.Result.Usage) {
-        if !loggedModelReady {
-            logger.info("Loading MLX embedding model: \(modelId)")
+        // Not ready: say so now rather than holding the caller through a download.
+        // A load that failed (offline on first run) is tried again in the background.
+        if let health, health.phase != .ready {
+            if health.phase == .failed || health.phase == .idle {
+                Task { await self.warmup() }
+            }
+            throw EmbedderNotReady(health: health)
         }
-        let (embeddings, promptTokens) = try await embedder.embedWithUsage(texts)
+        let (embeddings, promptTokens) = try await embedder.embedWithUsage(
+            texts, role: role == .query ? .query : .document)
         if !loggedModelReady {
             loggedModelReady = true
-            logger.info("MLX embedding model ready: \(modelId)")
+            logger.info("MLX embedding model ready: \(embedder.profile.model) (\(embedder.profile.vectorSpace))")
         }
 
         let result = embeddings.enumerated().map { i, vector in

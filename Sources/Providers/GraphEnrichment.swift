@@ -66,7 +66,7 @@ enum GraphEnrichment {
         var relationshipEmbeddings: [RelationshipID: [Float]] = [:]
         var predicateEmbeddings: [PredicateID: [Float]] = [:]
         do {
-            let embeds = try await embedder.run(batchStrings, logger: logger, priority: false).result
+            let embeds = try await embedder.run(batchStrings, logger: logger, role: .document).result
             let sorted = embeds.sorted { $0.index < $1.index }
             for (key, index) in relationshipKeyToIndex
             where index < sorted.count {

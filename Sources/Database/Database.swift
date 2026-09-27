@@ -23,6 +23,11 @@ actor Database {
     private var pending: [WriteJob] = []
     private var isProcessing = false
 
+    /// The embedder this process runs, as it would stamp the table (EmbedderStamp.swift).
+    var runningEmbedder: EmbedderStamp?
+    /// How the table's vectors relate to it; `nil` until reconciled.
+    var indexState: IndexState?
+
     init(nodeId: UUID? = nil, config: DatabaseConfig = DatabaseConfig()) {
         var baseLogger = Logger(label: "thread-logger")
         baseLogger.logLevel = .debug
@@ -67,6 +72,7 @@ actor Database {
         await tableMutator.clearAll()
         await registryMutator.clearAll()
         documentCache.seed([:])
+        restampAfterClear()
         logger.info(
             "Clear",
             "🧹 Cleared node database — \(documentCount) document(s), \(entityCount) entity(ies) removed",

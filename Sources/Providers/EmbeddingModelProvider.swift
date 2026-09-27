@@ -3,21 +3,75 @@ import Logging
 
 // MARK: - Protocol
 
+/// What a text is embedded for. Asymmetric models (voyage-4-nano) prompt a search
+/// query differently from a passage being indexed, so every call says which it is.
+/// Queries are also the interactive ones: they go ahead of queued indexing.
+enum EmbeddingRole: String, Sendable {
+    /// Search text, graph queries, predicate hints — compared against, never stored.
+    case query
+    /// Partitions, relationship and predicate strings — what the index keeps.
+    case document
+
+    var isInteractive: Bool { self == .query }
+}
+
+/// Where the embedder is, for `/health`: what it is, and whether it can answer yet.
+struct EmbedderHealth: Codable, Sendable, Equatable {
+    enum Phase: String, Codable, Sendable { case idle, downloading, loading, ready, failed }
+
+    var model: String
+    var revision: String?
+    var vectorSpace: String
+    var phase: Phase
+    /// 0…1 while downloading.
+    var progress: Double?
+    var error: String?
+}
+
+/// Thrown when the embedder has not finished downloading or loading. Callers that
+/// file documents answer "try again later" instead of waiting out a download.
+struct EmbedderNotReady: Error, CustomStringConvertible {
+    let health: EmbedderHealth
+
+    var description: String {
+        switch health.phase {
+        case .downloading:
+            let percent = health.progress.map { " \(Int($0 * 100))%" } ?? ""
+            return "embedding model downloading\(percent)"
+        case .failed:
+            return "embedding model failed to load: \(health.error ?? "unknown error")"
+        default:
+            return "embedding model \(health.phase.rawValue)"
+        }
+    }
+}
+
 /// Abstraction over the embedding back-end so tests can substitute a mock
-/// without hitting the network.  The three methods below are the only ones
-/// called from route handlers; `EmbeddingModelProvider` satisfies this
-/// protocol through its normal actor-isolated implementations.
+/// without hitting the network. `run` is the only call route handlers make;
+/// `EmbeddingModelProvider` satisfies this protocol through its normal
+/// actor-isolated implementations.
 protocol EmbeddingProviding: Actor {
     func acquirePreprocessSlot() async
     func releasePreprocessSlot() async
     func run(
         _ texts: [String],
         logger: Logger,
-        priority: Bool
+        role: EmbeddingRole
     ) async throws -> (result: [EmbeddingData], usage: Requests.Embedding.Get.Result.Usage)
+    /// The space this provider's vectors live in — what the index is stamped with.
+    /// `nil`: nothing to stamp (test doubles).
+    nonisolated var vectorSpace: String? { get }
+    /// Download/load state. `nil` for a provider with nothing to load (the API).
+    nonisolated var health: EmbedderHealth? { get }
+    /// Fetch and load ahead of the first request.
+    func warmup() async
 }
 
 extension EmbeddingProviding {
+    nonisolated var vectorSpace: String? { nil }
+    nonisolated var health: EmbedderHealth? { nil }
+    func warmup() async {}
+
     /// Run `body` while holding a preprocess slot, releasing it on every exit
     /// path — including throws. Replaces the `defer { Task { await release } }`
     /// pattern, whose unstructured release task could be delayed (or never
@@ -93,18 +147,24 @@ actor EmbeddingModelProvider: EmbeddingProviding {
         self.network = NetworkService(logger: logger)
     }
 
+    /// mistral-embed is symmetric: one space for queries and documents.
+    nonisolated var vectorSpace: String? { "mistral-embed@1024" }
+
     // MARK: - Public API
 
-    /// - Parameter priority: Pass `true` for interactive search queries so they
-    ///   are served before any queued bulk-indexing requests.
+    /// - Parameter role: `.query` for interactive search text, served before any
+    ///   queued bulk indexing; `.document` for what the index stores.
     func run(
         _ texts: [String],
         logger: Logger,
-        priority: Bool = false
+        role: EmbeddingRole
     ) async throws -> (result: [EmbeddingData], usage: Requests.Embedding.Get.Result.Usage) {
         logger.debug("Generating embeddings for \(texts.count) text(s)")
+        let priority = role.isInteractive
 
-        let key = texts.joined(separator: "\u{0000}")
+        // The role is part of the key: a query and a document with the same text are
+        // different requests to an asymmetric model, and cheap to keep apart here.
+        let key = role.rawValue + "\u{0000}" + texts.joined(separator: "\u{0000}")
 
         // Coalesce: if an identical request is already in-flight, share its result.
         if let existing = inflightTasks[key] {

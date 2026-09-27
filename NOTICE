@@ -39,10 +39,14 @@ extraction.
 Models
 --------------------------------------------------------------------------------
 
-No model weights are included in this repository. The on-device defaults
-(`mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ` for embeddings and
-`mlx-community/Qwen3-1.7B-4bit` for graph extraction) are downloaded from the
-Hugging Face Hub on first use and carry their own licences. The Mistral API
+No model weights are included in this repository. The on-device defaults are
+downloaded from the Hugging Face Hub on first use and carry their own licences:
+
+- Embeddings: `rao-studios/voyage-4-nano-mlx-8bit`, Rao Studios' MLX conversion of
+  voyage-4-nano (Copyright (c) 2026 MongoDB, Inc.; built on Qwen 3, Copyright
+  (c) 2024-2025 Alibaba Cloud), Apache License 2.0. The repository carries the
+  licence and the upstream NOTICE with Rao Studios' statement of the changes.
+- Graph extraction: `mlx-community/Qwen3-1.7B-4bit`. The Mistral API
 backends (`mistral-embed`, `mistral-tiny`) are a third-party hosted service
 governed by Mistral's terms.
 

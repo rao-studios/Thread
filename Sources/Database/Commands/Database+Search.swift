@@ -142,7 +142,7 @@ extension Database {
                                    provider: (any EmbeddingProviding)?) async throws -> [EmbeddingData] {
         if let provider {
             return try await StandaloneGeneration
-                .runEmbedding(texts, modelProvider: provider, logger: logger.base, priority: true)
+                .runEmbedding(texts, modelProvider: provider, logger: logger.base, role: .query)
         } else {
             return try await StandaloneGeneration
                 .runAPIEmbedding(texts, logger: logger.base)

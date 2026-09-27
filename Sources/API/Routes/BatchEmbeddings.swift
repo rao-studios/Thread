@@ -37,6 +37,9 @@ func registerBatchEmbeddingsRoute(
     graphExtractor: any GraphExtracting
 ) {
     app.post("/v1/batch/embeddings") { request, context async throws -> EmbeddingBatchResponse in
+        if let refusal = await database.vectorRefusal() {
+            throw HTTPError(.conflict, message: refusal)
+        }
         let embeddingRequest = try await request.decode(as: EmbeddingBatchRequest.self, context: context)
         let baseReq = embeddingRequest.thread.withRequestID(context.id)
         let databaseReq: DatabaseRequest = baseReq.ownerId.isEmpty
@@ -224,7 +227,7 @@ func registerBatchEmbeddingsRoute(
             )
 
             let (allEmbeddings, usage) = try await embeddingModelProvider.run(
-                allToEmbed, logger: context.logger, priority: false
+                allToEmbed, logger: context.logger, role: .document
             )
             totalPromptTokens += usage.promptTokens
 

@@ -6,9 +6,9 @@ class StandaloneGeneration {
         _ texts: [String],
         modelProvider: any EmbeddingProviding,
         logger: Logger,
-        priority: Bool = false
+        role: EmbeddingRole
     ) async throws -> [EmbeddingData] {
-        return try await modelProvider.run(texts, logger: logger, priority: priority).result
+        return try await modelProvider.run(texts, logger: logger, role: role).result
     }
 
     static func runAPIEmbedding(

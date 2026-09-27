@@ -23,7 +23,7 @@ final class ThreadGraphServiceImpl: Thread_V1_ThreadGraph.SimpleServiceProtocol,
         var queryVector: [Float]?
         if !request.query.isEmpty {
             let (embeds, _) = try await embeddingProvider.run(
-                [request.query], logger: database.baseLogger, priority: true
+                [request.query], logger: database.baseLogger, role: .query
             )
             if case .floats(let v) = embeds.first?.embedding { queryVector = v }
         }

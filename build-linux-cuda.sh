@@ -57,7 +57,7 @@ swift build -c "$BUILD_CONFIG" --jobs 2
 echo ""
 echo "Done. Run with:"
 if [[ $BUILD_CONFIG == "release" ]]; then
-    echo "  .build/release/thread --use-mlx --mlx-model mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
+    echo "  .build/release/thread --use-mlx"
 else
-    echo "  .build/debug/thread --use-mlx --mlx-model mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
+    echo "  .build/debug/thread --use-mlx"
 fi

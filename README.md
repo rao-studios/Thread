@@ -120,9 +120,8 @@ Thread owns no user sessions and no authentication — that is Sewn's responsibi
 cp .env.example .env
 # Edit .env and set MISTRAL_API_KEY
 
-# On-device MLX (no key needed — downloads ~500 MB model once)
-pip3 install huggingface_hub
-python3 -m huggingface_hub download mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ
+# On-device MLX: no key needed. The embedding model (~370 MB) downloads on first
+# start into $HF_HOME/snapshots (or ~/Documents/huggingface without HF_HOME).
 ```
 
 Build and run:
@@ -143,11 +142,8 @@ chmod +x setup-cuda-ubuntu.sh
 
 After the script finishes, open a new terminal (or `source ~/.bashrc`) so the CUDA and Swift paths are live.
 
-**Download the embedding model** (one-time, ~500 MB):
-
-```bash
-python3 -m huggingface_hub download mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ
-```
+**The embedding model** (~370 MB) downloads on first start, into `$HF_HOME/snapshots` —
+set `HF_HOME` to keep it off the home directory.
 
 **Build:**
 
@@ -230,7 +226,7 @@ curl http://127.0.0.1:8080/health
 | `--fleet-host` | _(empty)_ | Fleet host for dataset import — leave unset to skip |
 | `--fleet-grpc-port` | `9092` | Fleet gRPC port |
 | `--use-mlx` | `false` | Use on-device MLX embeddings (Apple Silicon / CUDA builds only) |
-| `--mlx-model` | `mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ` | Hub model ID for MLX embeddings |
+| `--mlx-model` | `rao-studios/voyage-4-nano-mlx-8bit` | On-device embedding model: `org/repo`, `org/repo@<revision>`, or a snapshot directory |
 | `--graph-backend` | `mlx` | Graph extraction backend: `mlx` (on-device), `mistral` (API), or `keyword` |
 | `--graph-model` | `mlx-community/Qwen3-1.7B-4bit` | Hub model ID for on-device graph extraction |
 | `--graph-mistral-model` | `mistral-tiny` | Model used when `--graph-backend mistral` |
@@ -427,11 +423,13 @@ Two backends, selected at startup with `--use-mlx`:
 | Backend | Flag | Model | Dimensions |
 |---|---|---|---|
 | Mistral API (default) | _(none)_ | `mistral-embed` | 1024 |
-| On-device MLX | `--use-mlx` | `Qwen3-Embedding-0.6B-4bit-DWQ` (default) | 1024 |
+| On-device MLX | `--use-mlx` | voyage-4-nano (`rao-studios/voyage-4-nano-mlx-8bit`, default) | 1024 |
 
 **Mistral** — Actor-based API client. Max 3 concurrent slots with a priority queue; identical texts within a batch are coalesced into one request. Requires `MISTRAL_API_KEY`.
 
-**MLX** — Runs entirely on-device via Apple Silicon GPU. Model is loaded from the Hugging Face Hub cache on first request. No API key or network access needed after download. Use `--mlx-model` to specify a different Hub model ID.
+**MLX** — Runs entirely on-device via Apple Silicon GPU, through Frigate's `FrigateEmbedder`. The default is voyage-4-nano — Rao's 8-bit MLX conversion of `voyageai/voyage-4-nano`, pinned to a commit — cut to 1024 dimensions. It is asymmetric: every embedding call says whether its text is a query (search, graph queries) or a document (partitions, relationship strings), and Frigate adds the matching prompt. The model downloads and loads at startup (`/health` reports `embedder.phase`: downloading with a fraction, loading, ready); a filing that arrives before it is ready gets `UNAVAILABLE` rather than waiting out the download. No API key or network access needed after download. Use `--mlx-model` for another model.
+
+**Which model wrote the index** is stamped beside the table (`embedder-<nodeId>`). Started with a different embedder over a filled table, Thread logs it and reports `embedder.index: "mismatch"` (or `"unstamped"` for an index from before stamps) — vectors from two models are not comparable. `POST /v1/clear` empties the table and re-stamps it.
 
 ---
 

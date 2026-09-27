@@ -27,6 +27,10 @@ final class ThreadQueryServiceImpl: Thread_V1_ThreadQuery.SimpleServiceProtocol,
         request: Thread_V1_ThreadSearchRequest,
         context: GRPCCore.ServerContext
     ) async throws -> Thread_V1_ThreadSearchResponse {
+        // Another model's index: nothing in it is comparable with this model's query.
+        if await database.vectorRefusal() != nil {
+            return Thread_V1_ThreadSearchResponse()
+        }
         // The scan is ~0.2ms; the real cost of a search RPC is the query
         // embedding round-trip(s) — timed here because the PartitionTable
         // timer starts after embedding and is structurally blind to it.
@@ -57,7 +61,7 @@ final class ThreadQueryServiceImpl: Thread_V1_ThreadQuery.SimpleServiceProtocol,
         if needsQuery {
             let embedStart = Date()
             if let (embeds, _) = try? await embeddingProvider.run(
-                [request.queryText], logger: database.baseLogger, priority: true
+                [request.queryText], logger: database.baseLogger, role: .query
             ) {
                 if let entry = embeds.first(where: { $0.index == 0 }),
                    case let .floats(v) = entry.embedding {
@@ -84,7 +88,7 @@ final class ThreadQueryServiceImpl: Thread_V1_ThreadQuery.SimpleServiceProtocol,
             let embedStart = Date()
             if let (embeds, _) = try? await embeddingProvider.run(
                 ["Relationship predicates: \(predicateHint)"],
-                logger: database.baseLogger, priority: true
+                logger: database.baseLogger, role: .query
             ), let entry = embeds.first(where: { $0.index == 0 }),
               case let .floats(vector) = entry.embedding {
                 predicateFloats = vector
@@ -176,6 +180,11 @@ final class ThreadQueryServiceImpl: Thread_V1_ThreadQuery.SimpleServiceProtocol,
         request: Thread_V1_ThreadIndexRequest,
         context: GRPCCore.ServerContext
     ) async throws -> Thread_V1_ThreadIndexResponse {
+        // Another model's index is held as it is, so choosing that model again finds
+        // it whole. The caller is told why rather than filing into the wrong space.
+        if let refusal = await database.vectorRefusal() {
+            throw RPCError(code: .failedPrecondition, message: refusal)
+        }
         let group: Database.Group? = request.groupID.isEmpty ? nil :
             Database.Group(id: request.groupID, label: request.groupLabel, ownerId: request.ownerID, documents: [])
 
@@ -225,11 +234,18 @@ final class ThreadQueryServiceImpl: Thread_V1_ThreadQuery.SimpleServiceProtocol,
             }
             let missing = vectors.indices.filter { vectors[$0] == nil }
             if !missing.isEmpty {
-                let (embeddings, _) = try await embeddingProvider.run(
-                    missing.map { texts[$0] },
-                    logger: database.baseLogger,
-                    priority: false
-                )
+                let embeddings: [EmbeddingData]
+                do {
+                    embeddings = try await embeddingProvider.run(
+                        missing.map { texts[$0] },
+                        logger: database.baseLogger,
+                        role: .document
+                    ).result
+                } catch let notReady as EmbedderNotReady {
+                    // First run: the model is still downloading. The caller keeps the
+                    // document and files it again, rather than timing out on us.
+                    throw RPCError(code: .unavailable, message: notReady.description)
+                }
                 for entry in embeddings where entry.index < missing.count {
                     if case let .floats(v) = entry.embedding { vectors[missing[entry.index]] = v }
                 }
