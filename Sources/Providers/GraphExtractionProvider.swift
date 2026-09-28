@@ -218,13 +218,16 @@ enum MLXRuntimeProbe {
     }
 }
 
-/// On-device LLM extractor. Lazily loads a small instruct model via the Hub and runs a fresh
+/// On-device LLM extractor. Lazily loads an instruct model via the Hub and runs a fresh
 /// deterministic chat session per document. Any parse failure throws so the caller can fall
 /// back to keywords — extraction never fails ingest.
+/// PIN: `--graph-model` may name a multi-gigabyte model (Ambient names Sewn's on-device one,
+/// resident here as a second copy so extraction never waits on a reply). Readings that arrive
+/// while it loads share the one load: two loads would be two copies resident.
 actor MLXGraphExtractionProvider: GraphExtracting {
     private let modelId: String
     private let maxInputChars: Int
-    private var container: ModelContainer?
+    private var loading: Task<ModelContainer, Error>?
 
     init(modelId: String = "mlx-community/Qwen3-1.7B-4bit", maxInputChars: Int = 3_000) {
         self.modelId = modelId
@@ -245,16 +248,26 @@ actor MLXGraphExtractionProvider: GraphExtracting {
     }
 
     private func loadedModel(logger: Logger) async throws -> ModelContainer {
-        if let container { return container }
-        logger.info("Loading MLX extraction model: \(modelId)")
-        let loaded = try await LLMModelFactory.shared.loadContainer(
-            from: HubDownloader(),
-            using: HubTokenizerLoader(),
-            configuration: ModelConfiguration(id: modelId)
-        )
-        container = loaded
-        logger.info("MLX extraction model ready: \(modelId)")
-        return loaded
+        if let loading { return try await loading.value }
+        let modelId = modelId
+        let task = Task {
+            logger.info("Loading MLX extraction model: \(modelId)")
+            let loaded = try await LLMModelFactory.shared.loadContainer(
+                from: HubDownloader(),
+                using: HubTokenizerLoader(),
+                configuration: ModelConfiguration(id: modelId)
+            )
+            logger.info("MLX extraction model ready: \(modelId)")
+            return loaded
+        }
+        loading = task
+        do {
+            return try await task.value
+        } catch {
+            // A failed load is tried again by the next reading, not remembered.
+            if loading == task { loading = nil }
+            throw error
+        }
     }
 }
 #endif
