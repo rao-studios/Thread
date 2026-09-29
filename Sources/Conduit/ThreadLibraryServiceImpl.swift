@@ -164,6 +164,11 @@ final class ThreadLibraryServiceImpl: Thread_V1_ThreadLibrary.SimpleServiceProto
         content.id = documentId
         content.texts = parts.map(\.data)
         content.mediaType = parts.first?.mediaType.rawValue ?? MediaType.text.rawValue
+        // What the document was deposited with, byte for byte: a Rao Verified
+        // record lives in it, and its seal signs bytes that must not change.
+        if let metadata = database.table?.index(for: documentId)?.metadata {
+            content.metadata = metadata
+        }
         if includeEmbeddings {
             // One entry per partition, in the same order as `texts`. The vector is
             // present only where the caller supplied it at index time.
